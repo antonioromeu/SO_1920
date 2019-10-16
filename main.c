@@ -15,6 +15,7 @@ char* fileInput = NULL;
 char* fileOutput = NULL;
 char inputCommands[MAX_COMMANDS][MAX_INPUT_SIZE];
 int numberThreads = 0;
+int numberBuckets = 0;
 int numberCommands = 0;
 int headQueue = 0;
 
@@ -45,7 +46,7 @@ static void displayUsage (const char* appName) {
 }
 
 static void parseArgs (long argc, char* const argv[]) {
-    if (argc != 4) {
+    if (argc != 5) {
         fprintf(stderr, "Invalid format:\n");
         displayUsage(argv[0]);
     }
@@ -61,6 +62,7 @@ static void parseArgs (long argc, char* const argv[]) {
         #endif
         numberThreads = 1;
     }
+    numberBuckets = atoi(argv[4]);
 }
 
 int insertCommand(char* data) {
