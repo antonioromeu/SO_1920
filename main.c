@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #include "fs.h"
 
-#define MAX_COMMANDS 150000
+#define MAX_COMMANDS 10 //150000
 #define MAX_INPUT_SIZE 100
 
 tecnicofs* fs;
@@ -18,6 +18,7 @@ int numberThreads = 0;
 int numberBuckets = 0;
 int numberCommands = 0;
 int headQueue = 0;
+int CommandNumber = 0;
 
 #ifdef MUTEX
 pthread_mutex_t locker1;
@@ -99,8 +100,9 @@ void processInput() {
             case 'c':
             case 'l':
             case 'd':
-                if (numTokens != 2)
+                if (numTokens != 2) {
                     errorParse();
+                }
                 if (insertCommand(line))
                     break;
                 return;
@@ -135,12 +137,12 @@ void* applyCommands() {
             case 'c':
                 LOCK(locker2);
                 iNumber = obtainNewInumber(fs);
-                create(fs, name, iNumber);
+                create(fs, name, iNumber, numberBuckets);
                 UNLOCK(locker2);
                 break;
             case 'l':
                 LOCK(locker2);
-                searchResult = lookup(fs, name);
+                searchResult = lookup(fs, name, numberBuckets);
                 UNLOCK(locker2);
                 if(!searchResult)
                     printf("%s not found\n", name);
@@ -149,7 +151,7 @@ void* applyCommands() {
                 break;
             case 'd':
                 LOCK(locker2);
-                delete(fs, name);
+                delete(fs, name, numberBuckets);
                 UNLOCK(locker2);
                 break;
             default: {
@@ -185,14 +187,14 @@ int main(int argc, char* argv[]) {
     double seconds, micros;
     parseArgs(argc, argv);
     processInput();
-    fs = new_tecnicofs();
+    fs = new_tecnicofs(numberBuckets);
     gettimeofday(&start, NULL);
     applyThread();
     gettimeofday(&end, NULL);
     FILE* fptr = fopen(fileOutput, "a");
-    print_tecnicofs_tree(fptr, fs);
+    print_tecnicofs_tree(fptr, fs, numberBuckets);
     fclose(fptr);
-    free_tecnicofs(fs);
+    free_tecnicofs(fs, numberBuckets);
     seconds = (double) (end.tv_sec - start.tv_sec);
     micros = (double) ((seconds + (double) (end.tv_usec - start.tv_usec)/1000000));
     printf("TecnicoFS completed in %.4f seconds.\n", micros);
