@@ -7,7 +7,7 @@
 #include <sys/time.h>
 #include "fs.h"
 
-#define MAX_COMMANDS 10 //150000
+#define MAX_COMMANDS 10
 #define MAX_INPUT_SIZE 100
 
 tecnicofs* fs;
@@ -15,10 +15,11 @@ char* fileInput = NULL;
 char* fileOutput = NULL;
 char inputCommands[MAX_COMMANDS][MAX_INPUT_SIZE];
 int numberThreads = 0;
-int numberBuckets = 0;
+int numberBuckets = 1;
 int numberCommands = 0;
 int headQueue = 0;
 int CommandNumber = 0;
+int lastIndex = 0;
 
 #ifdef MUTEX
 pthread_mutex_t locker1;
@@ -54,16 +55,18 @@ static void parseArgs (long argc, char* const argv[]) {
     fileInput = argv[1];
     fileOutput = argv[2];
     numberThreads = atoi(argv[3]);
-    if (numberThreads != 1) {
+    numberBuckets = atoi(argv[4]);
+    if (numberThreads < 1)
+        exit(EXIT_FAILURE);
+    else if (numberThreads > 1) {
         #ifdef MUTEX
         return;
         #endif
         #ifdef RWLOCK
         return;
         #endif
-        numberThreads = 1;
     }
-    numberBuckets = atoi(argv[4]);
+    numberThreads = 1;
 }
 
 int insertCommand(char* data) {
@@ -88,6 +91,8 @@ void errorParse() {
 
 void processInput() {
     FILE* fptr  = fopen(fileInput, "r");
+    if (!fptr)
+        exit(EXIT_FAILURE);
     char line[MAX_INPUT_SIZE];
     while(fgets(line, sizeof(line)/sizeof(char), fptr)) {
         char token;
@@ -117,10 +122,11 @@ void processInput() {
 }
 
 void* applyCommands() {
+    LOCK(locker1);
     while(numberCommands > 0) {
-        LOCK(locker1);
         const char* command = removeCommand();
         if (command == NULL) {
+            UNLOCK(locker1);
             continue;
         }
         char token;
@@ -167,6 +173,8 @@ void* applyCommands() {
 void applyThread() {
     INIT();
     pthread_t workers[numberThreads];
+    //int err = pthread_create(&workers[0], NULL, processInput, NULL);
+    //for (int i = 1; i < numberThreads; i++) {
     for (int i = 0; i < numberThreads; i++) {
         int err = pthread_create(&workers[i], NULL, applyCommands, NULL);
         if (err != 0) {
@@ -186,12 +194,14 @@ int main(int argc, char* argv[]) {
     struct timeval start, end;
     double seconds, micros;
     parseArgs(argc, argv);
+    //gettimeofday(&start, NULL);
+    //applyThread();
     processInput();
     fs = new_tecnicofs(numberBuckets);
     gettimeofday(&start, NULL);
     applyThread();
     gettimeofday(&end, NULL);
-    FILE* fptr = fopen(fileOutput, "a");
+    FILE* fptr = fopen(fileOutput, "w");
     print_tecnicofs_tree(fptr, fs, numberBuckets);
     fclose(fptr);
     free_tecnicofs(fs, numberBuckets);

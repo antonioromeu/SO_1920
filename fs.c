@@ -4,7 +4,7 @@
 #include "fs.h"
 
 int obtainNewInumber(tecnicofs* fs) {
-	int i = ++fs->nextINumber;
+	int i = ++(fs->nextINumber);
     return i;
 }
 
