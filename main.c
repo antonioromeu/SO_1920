@@ -21,6 +21,7 @@ int numberCommands = 0;
 int headQueue = 0;
 int CommandNumber = 0;
 int lastIndex = 0;
+int reachedEnd = 0;
 sem_t sem1;
 sem_t sem2;
 
@@ -29,40 +30,28 @@ pthread_mutex_t locker1;
 pthread_mutex_t locker2;
 #define INIT() { \
     if(pthread_mutex_init(&locker1, NULL)) exit(EXIT_FAILURE); \
-    if(pthread_mutex_init(&locker2, NULL)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem1, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem2, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); }
+    if(pthread_mutex_init(&locker2, NULL)) exit(EXIT_FAILURE); }
 #define LOCK(A) pthread_mutex_lock(&A)
 #define UNLOCK(A) pthread_mutex_unlock(&A)
 #define DESTROY() { \
     if(pthread_mutex_destroy(&locker1)) exit(EXIT_FAILURE); \
-    if(pthread_mutex_destroy(&locker2)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem1)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem2)) exit(EXIT_FAILURE); }
+    if(pthread_mutex_destroy(&locker2)) exit(EXIT_FAILURE); }
 #elif RWLOCK
 pthread_rwlock_t locker1;
 pthread_rwlock_t locker2;
 #define INIT() { \
     if(pthread_rwlock_init(&locker1, NULL)) exit(EXIT_FAILURE); \
-    if(pthread_rwlock_init(&locker2, NULL)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem1, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem2, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); }
+    if(pthread_rwlock_init(&locker2, NULL)) exit(EXIT_FAILURE); }
 #define LOCK(A) pthread_rwlock_wrlock(&A)
 #define UNLOCK(A) pthread_rwlock_unlock(&A)
 #define DESTROY() { \
     if(pthread_rwlock_destroy(&locker1)) exit(EXIT_FAILURE); \
-    if(pthread_rwlock_destroy(&locker2)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem1)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem2)) exit(EXIT_FAILURE); }
+    if(pthread_rwlock_destroy(&locker2)) exit(EXIT_FAILURE); }
 #else
-#define INIT() { \
-    if(sem_init(&sem1, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem2, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); }
+#define INIT() {}
 #define LOCK(A) {}
 #define UNLOCK(A) {}
-#define DESTROY() { \
-    if(sem_destroy(&sem1)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem2)) exit(EXIT_FAILURE); }
+#define DESTROY() {}
 #endif
 
 static void displayUsage (const char* appName) {
@@ -112,15 +101,10 @@ void errorParse() {
     fprintf(stderr, "Error: command invalid\n");
 }
 
-void processInput() {
+void* processInput() {
     FILE* fptr  = fopen(fileInput, "r");
-    if (!fptr)
-        exit(EXIT_FAILURE);
     char line[MAX_INPUT_SIZE];
-    //while(fgets(line, sizeof(line)/sizeof(char), fptr)) {
-    while(1) {
-        LOCK();
-        sem_wait(&sem1);
+    while(fgets(line, sizeof(line)/sizeof(char), fptr)) {
         char token;
         char name[MAX_INPUT_SIZE];
         int numTokens = sscanf(line, "%c %s", &token, name);
@@ -133,30 +117,39 @@ void processInput() {
             case 'd':
                 if (numTokens != 2)
                     errorParse();
-                if (insertCommand(line))
-                    break;
-                return;
+                else {
+                    LOCK(locker1);
+                    sem_wait(&sem1);
+                    if (insertCommand(line)) {
+                        UNLOCK(locker1);
+                        sem_post(&sem2);
+                        break;
+                    }
+                UNLOCK(locker1);
+                sem_post(&sem2);
+                
+                }
+                return NULL;
             case '#':
                 break;
             default: {
                 errorParse();
             }
         }
-        sem_post(&sem2);
     }
     fclose(fptr);
+    reachedEnd = 1;
+    return NULL;
 }
 
 void* applyCommands() {
-    while(1) {
+    while (!(reachedEnd == 1 && numberCommands == 0)) {
         LOCK(locker1);
         sem_wait(&sem2);
-        if (numberCommands <= 0) {
-            UNLOCK(LOCKER1);
-            break;
-        }
         const char* command = removeCommand();
+        printf("command: %s\n", command);
         if (command == NULL) {
+            sem_post(&sem1);
             UNLOCK(locker1);
             continue;
         }
@@ -177,7 +170,7 @@ void* applyCommands() {
                 iNumber = obtainNewInumber(fs);
                 create(fs, name, iNumber, numberBuckets);
                 UNLOCK(locker2);
-                break;
+                continue;
             case 'l':
                 LOCK(locker2);
                 searchResult = lookup(fs, name, numberBuckets);
@@ -186,18 +179,17 @@ void* applyCommands() {
                     printf("%s not found\n", name);
                 else
                     printf("%s found with inumber %d\n", name, searchResult);
-                break;
+                continue;
             case 'd':
                 LOCK(locker2);
                 delete(fs, name, numberBuckets);
                 UNLOCK(locker2);
-                break;
+                continue;
             default: {
                 fprintf(stderr, "Error: command to apply\n");
                 exit(EXIT_FAILURE);
             }
         }
-       
     }
     return NULL;
 }
@@ -206,14 +198,16 @@ void applyThread() {
     INIT();
     pthread_t processor;
     pthread_t workers[numberThreads];
-    int err = pthread_create(&processor, NULL, processInput, NULL);
-    if (err != 0) {
+    sem_init(&sem1, 0, MAX_COMMANDS);
+    sem_init(&sem2, 0, 0);
+    int err1 = pthread_create(&processor, NULL, processInput, NULL);
+    if (err1 != 0) {
       perror("Can't create thread\n");
       exit(EXIT_FAILURE);
     }
     for (int i = 0; i < numberThreads; i++) {
-        int err = pthread_create(&workers[i], NULL, applyCommands, NULL);
-        if (err != 0) {
+        int err2 = pthread_create(&workers[i], NULL, applyCommands, NULL);
+        if (err2 != 0) {
             perror("Can't create thread\n");
             exit(EXIT_FAILURE);
         }
@@ -224,6 +218,8 @@ void applyThread() {
         }
     }
     pthread_join(processor, NULL);
+    sem_destroy(&sem1);
+    sem_destroy(&sem2);
     DESTROY();
 }
 
@@ -231,11 +227,8 @@ int main(int argc, char* argv[]) {
     struct timeval start, end;
     double seconds, micros;
     parseArgs(argc, argv);
-    //gettimeofday(&start, NULL);
-    //applyThread();
-    processInput();
-    fs = new_tecnicofs(numberBuckets);
     gettimeofday(&start, NULL);
+    fs = new_tecnicofs(numberBuckets);
     applyThread();
     gettimeofday(&end, NULL);
     FILE* fptr = fopen(fileOutput, "w");
