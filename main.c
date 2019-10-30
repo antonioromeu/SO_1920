@@ -29,40 +29,28 @@ pthread_mutex_t locker1;
 pthread_mutex_t locker2;
 #define INIT() { \
     if(pthread_mutex_init(&locker1, NULL)) exit(EXIT_FAILURE); \
-    if(pthread_mutex_init(&locker2, NULL)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem1, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem2, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); }
+    if(pthread_mutex_init(&locker2, NULL)) exit(EXIT_FAILURE); }
 #define LOCK(A) pthread_mutex_lock(&A)
 #define UNLOCK(A) pthread_mutex_unlock(&A)
 #define DESTROY() { \
     if(pthread_mutex_destroy(&locker1)) exit(EXIT_FAILURE); \
-    if(pthread_mutex_destroy(&locker2)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem1)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem2)) exit(EXIT_FAILURE); }
+    if(pthread_mutex_destroy(&locker2)) exit(EXIT_FAILURE); }
 #elif RWLOCK
 pthread_rwlock_t locker1;
 pthread_rwlock_t locker2;
 #define INIT() { \
     if(pthread_rwlock_init(&locker1, NULL)) exit(EXIT_FAILURE); \
-    if(pthread_rwlock_init(&locker2, NULL)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem1, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem2, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); }
+    if(pthread_rwlock_init(&locker2, NULL)) exit(EXIT_FAILURE); }
 #define LOCK(A) pthread_rwlock_wrlock(&A)
 #define UNLOCK(A) pthread_rwlock_unlock(&A)
 #define DESTROY() { \
     if(pthread_rwlock_destroy(&locker1)) exit(EXIT_FAILURE); \
-    if(pthread_rwlock_destroy(&locker2)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem1)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem2)) exit(EXIT_FAILURE); }
+    if(pthread_rwlock_destroy(&locker2)) exit(EXIT_FAILURE); }
 #else
-#define INIT() { \
-    if(sem_init(&sem1, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); \
-    if(sem_init(&sem2, 0, MAX_COMMANDS)) exit(EXIT_FAILURE); }
+#define INIT() {}
 #define LOCK(A) {}
 #define UNLOCK(A) {}
-#define DESTROY() { \
-    if(sem_destroy(&sem1)) exit(EXIT_FAILURE); \
-    if(sem_destroy(&sem2)) exit(EXIT_FAILURE); }
+#define DESTROY() {}
 #endif
 
 static void displayUsage (const char* appName) {
@@ -117,14 +105,15 @@ void processInput() {
     if (!fptr)
         exit(EXIT_FAILURE);
     char line[MAX_INPUT_SIZE];
-    //while(fgets(line, sizeof(line)/sizeof(char), fptr)) {
     while(1) {
-        LOCK();
+        LOCK(locker1);
         sem_wait(&sem1);
+        fgets(line, sizeof(line)/sizeof(char), fptr);
         char token;
         char name[MAX_INPUT_SIZE];
         int numTokens = sscanf(line, "%c %s", &token, name);
         if (numTokens < 1) {
+            UNLOCK(locker1);
             continue;
         }
         switch (token) {
@@ -143,6 +132,7 @@ void processInput() {
             }
         }
         sem_post(&sem2);
+        UNLOCK(locker1);
     }
     fclose(fptr);
 }
@@ -152,7 +142,7 @@ void* applyCommands() {
         LOCK(locker1);
         sem_wait(&sem2);
         if (numberCommands <= 0) {
-            UNLOCK(LOCKER1);
+            UNLOCK(locker1);
             break;
         }
         const char* command = removeCommand();
@@ -206,14 +196,16 @@ void applyThread() {
     INIT();
     pthread_t processor;
     pthread_t workers[numberThreads];
-    int err = pthread_create(&processor, NULL, processInput, NULL);
-    if (err != 0) {
+    sem_init(&sem1, 0, MAX_COMMANDS);
+    sem_init(&sem2, 0, MAX_COMMANDS);
+    int err1 = pthread_create(&processor, NULL, processInput, NULL);
+    if (err1 != 0) {
       perror("Can't create thread\n");
       exit(EXIT_FAILURE);
     }
     for (int i = 0; i < numberThreads; i++) {
-        int err = pthread_create(&workers[i], NULL, applyCommands, NULL);
-        if (err != 0) {
+        int err2 = pthread_create(&workers[i], NULL, applyCommands, NULL);
+        if (err2 != 0) {
             perror("Can't create thread\n");
             exit(EXIT_FAILURE);
         }
@@ -224,6 +216,8 @@ void applyThread() {
         }
     }
     pthread_join(processor, NULL);
+    sem_destroy(&sem1);
+    sem_destroy(&sem2);
     DESTROY();
 }
 
