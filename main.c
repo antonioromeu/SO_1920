@@ -21,9 +21,8 @@ int numberCommands = 0;
 int headQueue = 0;
 int CommandNumber = 0;
 int lastIndex = 0;
-int reachedEnd = 0;
-sem_t sem1;
-sem_t sem2;
+sem_t sem_prod;
+sem_t sem_cons;
 
 #ifdef MUTEX
 pthread_mutex_t locker1;
@@ -82,18 +81,30 @@ static void parseArgs (long argc, char* const argv[]) {
 }
 
 int insertCommand(char* data) {
+    sem_wait(&sem_prod);   
+    LOCK(locker1);
     if(numberCommands != MAX_COMMANDS) {
         strcpy(inputCommands[numberCommands++], data);
+        UNLOCK(locker1);
+        sem_post(&sem_cons);
         return 1;
     }
+    UNLOCK(locker1);
+    sem_post(&sem_cons);
     return 0;
 }
 
-char* removeCommand() {    
+char* removeCommand() {
+    sem_wait(&sem_cons);
+    LOCK(locker1);
     if(numberCommands > 0) {
         numberCommands--;
+        UNLOCK(locker1);
+        sem_post(&sem_prod);
         return inputCommands[headQueue++];  
     }
+    UNLOCK(locker1);
+    sem_post(&sem_prod);
     return NULL;
 }
 
@@ -104,7 +115,7 @@ void errorParse() {
 void* processInput() {
     FILE* fptr  = fopen(fileInput, "r");
     char line[MAX_INPUT_SIZE];
-    while(fgets(line, sizeof(line)/sizeof(char), fptr)) {
+    while (fgets(line, sizeof(line)/sizeof(char), fptr)) {
         char token;
         char name[MAX_INPUT_SIZE];
         int numTokens = sscanf(line, "%c %s", &token, name);
@@ -118,15 +129,9 @@ void* processInput() {
                 if (numTokens != 2)
                     errorParse();
                 else {
-                    LOCK(locker1);
-                    sem_wait(&sem1);
                     if (insertCommand(line)) {
-                        UNLOCK(locker1);
-                        sem_post(&sem2);
                         break;
                     }
-                UNLOCK(locker1);
-                sem_post(&sem2);
                 
                 }
                 return NULL;
@@ -138,23 +143,21 @@ void* processInput() {
         }
     }
     fclose(fptr);
-    reachedEnd = 1;
+    //sem_wait(&sem_prod);
+    insertCommand("x");
+    //sem_post(&sem_cons);
     return NULL;
 }
 
 void* applyCommands() {
-    while (!(reachedEnd == 1 && numberCommands == 0)) {
-        LOCK(locker1);
-        sem_wait(&sem2);
+    while (1) { 
+        //sem_wait(&sem_cons); 
         const char* command = removeCommand();
-        printf("command: %s\n", command);
-        if (command == NULL) {
-            sem_post(&sem1);
-            UNLOCK(locker1);
-            continue;
+        //sem_post(&sem_prod); 
+        if (command == NULL) continue;
+        if (!strcmp(command, "x")) {
+            break;
         }
-        sem_post(&sem1);
-        UNLOCK(locker1);
         char token;
         char name[MAX_INPUT_SIZE];
         int numTokens = sscanf(command, "%c %s", &token, name);
@@ -198,8 +201,8 @@ void applyThread() {
     INIT();
     pthread_t processor;
     pthread_t workers[numberThreads];
-    sem_init(&sem1, 0, MAX_COMMANDS);
-    sem_init(&sem2, 0, 0);
+    sem_init(&sem_prod, 0, MAX_COMMANDS);
+    sem_init(&sem_cons, 0, 0);
     int err1 = pthread_create(&processor, NULL, processInput, NULL);
     if (err1 != 0) {
       perror("Can't create thread\n");
@@ -218,8 +221,8 @@ void applyThread() {
         }
     }
     pthread_join(processor, NULL);
-    sem_destroy(&sem1);
-    sem_destroy(&sem2);
+    sem_destroy(&sem_prod);
+    sem_destroy(&sem_cons);
     DESTROY();
 }
 
