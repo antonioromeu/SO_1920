@@ -120,6 +120,7 @@ void* processInput() {
         char name[MAX_INPUT_SIZE];
         int numTokens = sscanf(line, "%c %s", &token, name);
         if (numTokens < 1) {
+            UNLOCK(locker1);
             continue;
         }
         switch (token) {
