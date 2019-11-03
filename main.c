@@ -83,28 +83,28 @@ static void parseArgs (long argc, char* const argv[]) {
 int insertCommand(char* data) {
     sem_wait(&sem_prod);   
     LOCK(locker1);
-    if(numberCommands != MAX_COMMANDS) {
-        strcpy(inputCommands[numberCommands++], data);
+    if (numberCommands != MAX_COMMANDS) {
+        numberCommands++;
+        strcpy(inputCommands[(numberCommands + headQueue) % MAX_COMMANDS], data);
         UNLOCK(locker1);
         sem_post(&sem_cons);
         return 1;
     }
     UNLOCK(locker1);
-    sem_post(&sem_cons);
     return 0;
 }
 
 char* removeCommand() {
-    sem_wait(&sem_cons);
     LOCK(locker1);
-    if(numberCommands > 0) {
+    if (numberCommands > 0) {
         numberCommands--;
+        int i = (headQueue + 1) % MAX_COMMANDS;
+        headQueue++;
         UNLOCK(locker1);
-        sem_post(&sem_prod);
-        return inputCommands[headQueue++];  
+        printf("remove: %s\n", inputCommands[i]);
+        return inputCommands[i];
     }
     UNLOCK(locker1);
-    sem_post(&sem_prod);
     return NULL;
 }
 
@@ -113,6 +113,7 @@ void errorParse() {
 }
 
 void* processInput() {
+    printf("entrou no process\n");
     FILE* fptr  = fopen(fileInput, "r");
     char line[MAX_INPUT_SIZE];
     while (fgets(line, sizeof(line)/sizeof(char), fptr)) {
@@ -120,21 +121,15 @@ void* processInput() {
         char name[MAX_INPUT_SIZE];
         int numTokens = sscanf(line, "%c %s", &token, name);
         if (numTokens < 1) {
-            UNLOCK(locker1);
             continue;
         }
         switch (token) {
             case 'c':
             case 'l':
             case 'd':
-                if (numTokens != 2)
-                    errorParse();
-                else {
-                    if (insertCommand(line)) {
-                        break;
-                    }
-                
-                }
+                if (numTokens != 2) errorParse();
+                else
+                    if (insertCommand(line)) break;
                 return NULL;
             case '#':
                 break;
@@ -144,21 +139,17 @@ void* processInput() {
         }
     }
     fclose(fptr);
-    //sem_wait(&sem_prod);
     insertCommand("x");
-    //sem_post(&sem_cons);
     return NULL;
 }
 
 void* applyCommands() {
-    while (1) { 
-        //sem_wait(&sem_cons); 
+    while (1) {
+        sem_wait(&sem_cons);
         const char* command = removeCommand();
-        //sem_post(&sem_prod); 
+        sem_post(&sem_prod);
         if (command == NULL) continue;
-        if (!strcmp(command, "x")) {
-            break;
-        }
+        if (!strcmp(command, "x")) break;
         char token;
         char name[MAX_INPUT_SIZE];
         int numTokens = sscanf(command, "%c %s", &token, name);
@@ -174,12 +165,14 @@ void* applyCommands() {
                 iNumber = obtainNewInumber(fs);
                 create(fs, name, iNumber, numberBuckets);
                 UNLOCK(locker2);
+                sem_post(&sem_prod);
                 continue;
             case 'l':
                 LOCK(locker2);
                 searchResult = lookup(fs, name, numberBuckets);
                 UNLOCK(locker2);
-                if(!searchResult)
+                sem_post(&sem_prod);
+                if (!searchResult)
                     printf("%s not found\n", name);
                 else
                     printf("%s found with inumber %d\n", name, searchResult);
@@ -188,6 +181,7 @@ void* applyCommands() {
                 LOCK(locker2);
                 delete(fs, name, numberBuckets);
                 UNLOCK(locker2);
+                sem_post(&sem_prod);
                 continue;
             default: {
                 fprintf(stderr, "Error: command to apply\n");
