@@ -84,8 +84,8 @@ int insertCommand(char* data) {
     sem_wait(&sem_prod);   
     LOCK(locker1);
     if (numberCommands != MAX_COMMANDS) {
-        numberCommands++;
         strcpy(inputCommands[(numberCommands + headQueue) % MAX_COMMANDS], data);
+        numberCommands++;
         UNLOCK(locker1);
         sem_post(&sem_cons);
         return 1;
@@ -98,11 +98,10 @@ char* removeCommand() {
     LOCK(locker1);
     if (numberCommands > 0) {
         numberCommands--;
-        int i = (headQueue + 1) % MAX_COMMANDS;
-        headQueue++;
+        char* command = inputCommands[headQueue % MAX_COMMANDS];
+        headQueue = (headQueue + 1) % MAX_COMMANDS;
         UNLOCK(locker1);
-        printf("remove: %s\n", inputCommands[i]);
-        return inputCommands[i];
+        return command;
     }
     UNLOCK(locker1);
     return NULL;
