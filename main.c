@@ -164,13 +164,11 @@ void* applyCommands() {
                 iNumber = obtainNewInumber(fs);
                 create(fs, name, iNumber, numberBuckets);
                 UNLOCK(locker2);
-                sem_post(&sem_prod);
                 continue;
             case 'l':
                 LOCK(locker2);
                 searchResult = lookup(fs, name, numberBuckets);
                 UNLOCK(locker2);
-                sem_post(&sem_prod);
                 if (!searchResult)
                     printf("%s not found\n", name);
                 else
@@ -180,7 +178,6 @@ void* applyCommands() {
                 LOCK(locker2);
                 delete(fs, name, numberBuckets);
                 UNLOCK(locker2);
-                sem_post(&sem_prod);
                 continue;
             default: {
                 fprintf(stderr, "Error: command to apply\n");
