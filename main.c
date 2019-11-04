@@ -21,6 +21,7 @@ int numberCommands = 0;
 int headQueue = 0;
 int CommandNumber = 0;
 int lastIndex = 0;
+int flag = 1;
 sem_t sem_prod;
 sem_t sem_cons;
 
@@ -112,7 +113,6 @@ void errorParse() {
 }
 
 void* processInput() {
-    printf("entrou no process\n");
     FILE* fptr  = fopen(fileInput, "r");
     char line[MAX_INPUT_SIZE];
     while (fgets(line, sizeof(line)/sizeof(char), fptr)) {
@@ -143,12 +143,15 @@ void* processInput() {
 }
 
 void* applyCommands() {
-    while (1) {
+    while (flag) {
         sem_wait(&sem_cons);
         const char* command = removeCommand();
         sem_post(&sem_prod);
         if (command == NULL) continue;
-        if (!strcmp(command, "x")) break;
+        if (!strcmp(command, "x")) {
+            flag = 0; //é preciso proteger?
+            break;
+        }
         char token;
         char name[MAX_INPUT_SIZE];
         int numTokens = sscanf(command, "%c %s", &token, name);
