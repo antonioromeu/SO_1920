@@ -15,12 +15,10 @@ tecnicofs* fs;
 char* fileInput = NULL;
 char* fileOutput = NULL;
 char inputCommands[MAX_COMMANDS][MAX_INPUT_SIZE];
+int numberCommands = 0;
 int numberThreads = 0;
 int numberBuckets = 1;
-int numberCommands = 0;
 int headQueue = 0;
-int CommandNumber = 0;
-int lastIndex = 0;
 int flag = 1;
 sem_t sem_prod;
 sem_t sem_cons;
@@ -112,6 +110,38 @@ void errorParse() {
     fprintf(stderr, "Error: command invalid\n");
 }
 
+char** stringSplitter(char* input) {
+    char** files = (char**) malloc(2 * sizeof(char*));
+    files[0] = (char*) malloc(MAX_INPUT_SIZE * sizeof(char));
+    files[1] = (char*) malloc(MAX_INPUT_SIZE * sizeof(char));
+    int j = 0;
+    int ctr = 0;
+    for (int i = 0; i <= (strlen(input)); i++) {
+        if (input[i] == ' ' || input[i] == '\0') {
+            files[ctr][j] = '\0';
+            ctr++;
+            j = 0; 
+        }
+        else {
+            files[ctr][j] = input[i];
+            j++;
+        }
+    }
+    return files;
+}
+
+int argsOk(char* input) {
+    char** argsFile;
+    char* firstFile = NULL;
+    char* secondFile = NULL;  
+    argsFile = stringSplitter(input);
+    firstFile = argsFile[0];
+    secondFile = argsFile[1];
+    free(argsFile);
+    if (!firstFile || !secondFile) return 0;
+    return 1;
+}
+
 void* processInput() {
     FILE* fptr  = fopen(fileInput, "r");
     char line[MAX_INPUT_SIZE];
@@ -125,6 +155,7 @@ void* processInput() {
         switch (token) {
             case 'c':
             case 'l':
+            case 'r':
             case 'd':
                 if (numTokens != 2) errorParse();
                 else
@@ -181,6 +212,12 @@ void* applyCommands() {
                 LOCK(locker2);
                 delete(fs, name, numberBuckets);
                 UNLOCK(locker2);
+                continue;
+            case 'r':
+                if (!argsOk(name)) {
+                    fprintf(stderr, "Error: invalid command in Queue\n");
+                    exit(EXIT_FAILURE);
+                }
                 continue;
             default: {
                 fprintf(stderr, "Error: command to apply\n");
