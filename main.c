@@ -1,8 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <getopt.h>
 #include <string.h>
-#include <ctype.h>
 #include <pthread.h>
 #include <semaphore.h>
 #include <sys/time.h>
@@ -28,29 +26,35 @@ pthread_mutex_t commandsLocker;
 pthread_mutex_t* vecLock;
 #define INIT(A) { \
     vecLock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t) * A); \
-    if (pthread_mutex_init(&commandsLocker, NULL)) exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) { \
-        if(pthread_mutex_init(&vecLock[i], NULL)) exit(EXIT_FAILURE); } }
+    if (pthread_mutex_init(&commandsLocker, NULL)) \
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if(pthread_mutex_init(&vecLock[i], NULL)) \
+            exit(EXIT_FAILURE); }
 #define LOCK(A) pthread_mutex_lock(&A)
 #define UNLOCK(A) pthread_mutex_unlock(&A)
 #define DESTROY(A) { \
-    if (pthread_mutex_destroy(&commandsLocker)) exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) { \
-        if (pthread_mutex_destroy(&vecLock[i])); } }
+    if (pthread_mutex_destroy(&commandsLocker)) \
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if (pthread_mutex_destroy(&vecLock[i])); }
 #elif RWLOCK
 pthread_rwlock_t commandsLocker;
 pthread_rwlock_t* vecLock;
 #define INIT(A) { \
     vecLock = (pthread_rwlock_t*) malloc(sizeof(pthread_rwlock_t) * A); \
-    if(pthread_rwlock_init(&commandsLocker, NULL)) exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) { \
-        if(pthread_rwlock_init(&vecLock[i], NULL)) exit(EXIT_FAILURE); } }
+    if (pthread_rwlock_init(&commandsLocker, NULL)) \
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if (pthread_rwlock_init(&vecLock[i], NULL)) \
+            exit(EXIT_FAILURE); }
 #define LOCK(A) pthread_rwlock_wrlock(&A)
 #define UNLOCK(A) pthread_rwlock_unlock(&A)
 #define DESTROY(A) { \
-    if (pthread_rwlock_destroy(&commandsLocker)) exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) { \
-        if (pthread_rwlock_destroy(&vecLock[i])); } }
+    if (pthread_rwlock_destroy(&commandsLocker)) \
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if (pthread_rwlock_destroy(&vecLock[i])); }
 #else
 #define INIT(A) {}
 #define LOCK(A) {}
@@ -121,7 +125,8 @@ void* processInput() {
         char name[MAX_INPUT_SIZE]; 
         char rname[MAX_INPUT_SIZE];
         int numTokens = sscanf(line, "%c %s", &token, name);
-        if (numTokens < 1) continue;
+        if (numTokens < 1)
+            continue;
         switch (token) {
             case 'r':
                 numTokens = sscanf(line, "%c %s %s", &token, name, rname);
@@ -132,14 +137,15 @@ void* processInput() {
             case 'c':
             case 'l':
             case 'd':
-                if (numTokens != 2) errorParse();
-                else if (insertCommand(line)) break;
+                if (numTokens != 2)
+                    errorParse();
+                else if (insertCommand(line))
+                    break;
                 return NULL;
             case '#':
                 break;
-            default: {
+            default:
                 errorParse();
-            }
         }
     }
     fclose(fptr);
@@ -164,10 +170,12 @@ void* applyCommands() {
             break;
         }
         int iNumber;
-        if (command && command[0] == 'c') iNumber = obtainNewInumber(fs);
+        if (command && command[0] == 'c')
+            iNumber = obtainNewInumber(fs);
         UNLOCK(commandsLocker);
         sem_post(&sem_prod);
-        if (!command) continue;
+        if (!command)
+            continue;
         char token;
         char name[MAX_INPUT_SIZE];
         char rname[MAX_INPUT_SIZE];
@@ -176,7 +184,7 @@ void* applyCommands() {
             fprintf(stderr, "Error: invalid command in Queue\n");
             exit(EXIT_FAILURE);
         }
-        int searchResult;
+        int searchResult1;
         int searchResult2;
         switch (token) {
             case 'c':
@@ -186,12 +194,12 @@ void* applyCommands() {
                 break;
             case 'l':
                 LOCK(vecLock[hash(name, numberBuckets)]);
-                searchResult = lookup(fs, name, numberBuckets);
+                searchResult1 = lookup(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
-                if (!searchResult)
+                if (!searchResult1)
                     printf("%s not found\n", name);
                 else
-                    printf("%s found with inumber %d\n", name, searchResult);
+                    printf("%s found with inumber %d\n", name, searchResult1);
                 break;
             case 'd':
                 LOCK(vecLock[hash(name, numberBuckets)]);
@@ -200,23 +208,48 @@ void* applyCommands() {
                 break;
             case 'r':
                 numTokens = sscanf(command, "%c %s %s", &token, name, rname);
-                LOCK(vecLock[hash(name, numberBuckets)]);
-                searchResult = lookup(fs, name, numberBuckets);
-                if (!searchResult) {
-                    printf("%s not found\n", name);
+                if (hash(name, numberBuckets) <= hash(rname, numberBuckets)) {
+                    LOCK(vecLock[hash(name, numberBuckets)]);
+                    searchResult1 = lookup(fs, name, numberBuckets);
+                    UNLOCK(vecLock[hash(name, numberBuckets)]);
+                    if (!searchResult1) {
+                        printf("%s file not found\n", name);
+                        break;
+                    }
+                    LOCK(vecLock[hash(rname, numberBuckets)]);
+                    searchResult2 = lookup(fs, rname, numberBuckets);
+                    UNLOCK(vecLock[hash(rname, numberBuckets)]);
+                    if (searchResult2) {
+                        printf("%s file already exists\n", rname);
+                        break;
+                    }
+                    LOCK(vecLock[hash(name, numberBuckets)]);
+                    delete(fs, name, numberBuckets);
+                    create(fs, rname, searchResult1, numberBuckets);
                     UNLOCK(vecLock[hash(name, numberBuckets)]);
                     break;
                 }
-                searchResult2 = lookup(fs, rname, numberBuckets);
-                if (searchResult2) {
-                    printf("%s not found\n", rname);
+                else {
+                    LOCK(vecLock[hash(rname, numberBuckets)]);
+                    searchResult2 = lookup(fs, rname, numberBuckets);
+                    UNLOCK(vecLock[hash(rname, numberBuckets)]);
+                    if (searchResult2) {
+                        printf("%s file already exists\n", rname);
+                        break;
+                    }
+                    LOCK(vecLock[hash(name, numberBuckets)]);
+                    searchResult1 = lookup(fs, name, numberBuckets);
+                    UNLOCK(vecLock[hash(name, numberBuckets)]);
+                    if (!searchResult1) {
+                        printf("%s file not found\n", name);
+                        break;
+                    }
+                    LOCK(vecLock[hash(name, numberBuckets)]);
+                    delete(fs, name, numberBuckets);
+                    create(fs, rname, searchResult1, numberBuckets);
                     UNLOCK(vecLock[hash(name, numberBuckets)]);
                     break;
                 }
-                delete(fs, name, numberBuckets);
-                create(fs, rname, searchResult, numberBuckets);
-                UNLOCK(vecLock[hash(name, numberBuckets)]);
-                break;
             default: {
                 fprintf(stderr, "Error: command to apply\n");
                 exit(EXIT_FAILURE);
