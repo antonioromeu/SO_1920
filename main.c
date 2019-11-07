@@ -63,7 +63,7 @@ pthread_rwlock_t* vecLock;
 #endif
 
 static void displayUsage (const char* appName) {
-    printf("Usage: %s\n", appName);
+    printf("Usage: %s input_filepath output_filepath threads_number\n", appName);
     exit(EXIT_FAILURE);
 }
 
@@ -76,8 +76,10 @@ static void parseArgs (long argc, char* const argv[]) {
     fileOutput = argv[2];
     numberThreads = atoi(argv[3]);
     numberBuckets = atoi(argv[4]);
-    if (numberThreads < 1)
+    if (!numberThreads || !numberBuckets || numberThreads < 1 || numberBuckets < 1) {
+        fprintf(stderr, "Invalid arguments, insert the correct type of arguments\n");
         exit(EXIT_FAILURE);
+    }
     else if (numberThreads > 1) {
         #ifdef MUTEX
         return;
@@ -90,7 +92,7 @@ static void parseArgs (long argc, char* const argv[]) {
 }
 
 int insertCommand(char* data) {
-    sem_wait(&sem_prod);   
+    sem_wait(&sem_prod); 
     LOCK(commandsLocker);
     if (numberCommands != MAX_COMMANDS) {
         strcpy(inputCommands[(numberCommands + headQueue) % MAX_COMMANDS], data);
@@ -117,12 +119,83 @@ void errorParse() {
     fprintf(stderr, "Error: command invalid\n");
 }
 
+void commandRename(char* name, char* rname) {
+    int searchResult1;
+    int searchResult2;
+    if (hash(name, numberBuckets) == hash(rname, numberBuckets)) {
+        LOCK(vecLock[hash(name, numberBuckets)]);
+        searchResult1 = lookup(fs, name, numberBuckets);
+        searchResult2 = lookup(fs, rname, numberBuckets);
+        if (!searchResult1) {
+            printf("%s file not found\n", name);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            return;
+        }
+        if (searchResult2) {
+            printf("%s file already exists\n", rname);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            return;
+        }
+        delete(fs, name, numberBuckets);
+        create(fs, rname, searchResult1, numberBuckets);
+        UNLOCK(vecLock[hash(name, numberBuckets)]);
+    }
+    else if (hash(name, numberBuckets) < hash(rname, numberBuckets)) {
+        LOCK(vecLock[hash(name, numberBuckets)]);
+        LOCK(vecLock[hash(rname, numberBuckets)]);
+        searchResult1 = lookup(fs, name, numberBuckets);
+        if (!searchResult1) {
+            printf("%s file not found\n", name);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            UNLOCK(vecLock[hash(rname, numberBuckets)]);
+            return;
+        }
+        searchResult2 = lookup(fs, rname, numberBuckets);
+        if (searchResult2) {
+            printf("%s file already exists\n", rname);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            UNLOCK(vecLock[hash(rname, numberBuckets)]);
+            return;
+        }
+        delete(fs, name, numberBuckets);
+        create(fs, rname, searchResult1, numberBuckets);
+        UNLOCK(vecLock[hash(rname, numberBuckets)]);
+        UNLOCK(vecLock[hash(name, numberBuckets)]);
+    }
+    else {
+        LOCK(vecLock[hash(rname, numberBuckets)]);
+        LOCK(vecLock[hash(name, numberBuckets)]);
+        searchResult1 = lookup(fs, name, numberBuckets);
+        if (!searchResult1) {
+            printf("%s file not found\n", name);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            UNLOCK(vecLock[hash(rname, numberBuckets)]);
+            return;
+        }
+        searchResult2 = lookup(fs, rname, numberBuckets);
+        if (searchResult2) {
+            printf("%s file already exists\n", rname);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            UNLOCK(vecLock[hash(rname, numberBuckets)]);
+            return;
+        }
+        delete(fs, name, numberBuckets);
+        create(fs, rname, searchResult1, numberBuckets);
+        UNLOCK(vecLock[hash(name, numberBuckets)]);
+        UNLOCK(vecLock[hash(rname, numberBuckets)]);
+    }
+}
+
 void* processInput() {
     FILE* fptr  = fopen(fileInput, "r");
+    if (!fptr) {
+        fprintf(stderr, "Error: Could not read %s\n", fileInput);
+        exit(EXIT_FAILURE);
+    }
     char line[MAX_INPUT_SIZE];
     while (fgets(line, sizeof(line)/sizeof(char), fptr)) {
         char token;
-        char name[MAX_INPUT_SIZE]; 
+        char name[MAX_INPUT_SIZE];
         char rname[MAX_INPUT_SIZE];
         int numTokens = sscanf(line, "%c %s", &token, name);
         if (numTokens < 1)
@@ -184,8 +257,7 @@ void* applyCommands() {
             fprintf(stderr, "Error: invalid command in Queue\n");
             exit(EXIT_FAILURE);
         }
-        int searchResult1;
-        int searchResult2;
+        int searchResult;
         switch (token) {
             case 'c':
                 LOCK(vecLock[hash(name, numberBuckets)]);
@@ -194,66 +266,25 @@ void* applyCommands() {
                 break;
             case 'l':
                 LOCK(vecLock[hash(name, numberBuckets)]);
-                searchResult1 = lookup(fs, name, numberBuckets);
+                searchResult = lookup(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
-                if (!searchResult1)
+                if (!searchResult)
                     printf("%s not found\n", name);
                 else
-                    printf("%s found with inumber %d\n", name, searchResult1);
+                    printf("%s found with inumber %d\n", name, searchResult);
                 break;
             case 'd':
                 LOCK(vecLock[hash(name, numberBuckets)]);
                 delete(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
                 break;
-            case 'r':
+            case 'r': 
                 numTokens = sscanf(command, "%c %s %s", &token, name, rname);
-                if (hash(name, numberBuckets) <= hash(rname, numberBuckets)) {
-                    LOCK(vecLock[hash(name, numberBuckets)]);
-                    searchResult1 = lookup(fs, name, numberBuckets);
-                    UNLOCK(vecLock[hash(name, numberBuckets)]);
-                    if (!searchResult1) {
-                        printf("%s file not found\n", name);
-                        break;
-                    }
-                    LOCK(vecLock[hash(rname, numberBuckets)]);
-                    searchResult2 = lookup(fs, rname, numberBuckets);
-                    UNLOCK(vecLock[hash(rname, numberBuckets)]);
-                    if (searchResult2) {
-                        printf("%s file already exists\n", rname);
-                        break;
-                    }
-                    LOCK(vecLock[hash(name, numberBuckets)]);
-                    delete(fs, name, numberBuckets);
-                    create(fs, rname, searchResult1, numberBuckets);
-                    UNLOCK(vecLock[hash(name, numberBuckets)]);
-                    break;
-                }
-                else {
-                    LOCK(vecLock[hash(rname, numberBuckets)]);
-                    searchResult2 = lookup(fs, rname, numberBuckets);
-                    UNLOCK(vecLock[hash(rname, numberBuckets)]);
-                    if (searchResult2) {
-                        printf("%s file already exists\n", rname);
-                        break;
-                    }
-                    LOCK(vecLock[hash(name, numberBuckets)]);
-                    searchResult1 = lookup(fs, name, numberBuckets);
-                    UNLOCK(vecLock[hash(name, numberBuckets)]);
-                    if (!searchResult1) {
-                        printf("%s file not found\n", name);
-                        break;
-                    }
-                    LOCK(vecLock[hash(name, numberBuckets)]);
-                    delete(fs, name, numberBuckets);
-                    create(fs, rname, searchResult1, numberBuckets);
-                    UNLOCK(vecLock[hash(name, numberBuckets)]);
-                    break;
-                }
-            default: {
+                commandRename(name, rname);
+                break;
+            default:
                 fprintf(stderr, "Error: command to apply\n");
                 exit(EXIT_FAILURE);
-            }
         }
     }
     return NULL;
@@ -267,22 +298,21 @@ void applyThread() {
     sem_init(&sem_cons, 0, 0);
     int err1 = pthread_create(&processor, NULL, processInput, NULL);
     if (err1 != 0) {
-      perror("Can't create thread\n");
+      fprintf(stderr, "Can't create thread\n");
       exit(EXIT_FAILURE);
     }
     for (int i = 0; i < numberThreads; i++) {
         int err2 = pthread_create(&workers[i], NULL, applyCommands, NULL);
         if (err2 != 0) {
-            perror("Can't create thread\n");
+            fprintf(stderr, "Can't create thread\n");
             exit(EXIT_FAILURE);
         }
     }
-    if (pthread_join(processor, NULL)) perror("Can't join thread\n");
-    for (int i = 0; i < numberThreads; i++) {
-        if (pthread_join(workers[i], NULL)) {
-            perror("Can't join thread\n");
-        }
-    }
+    if (pthread_join(processor, NULL))
+        fprintf(stderr, "Can't join thread\n");
+    for (int i = 0; i < numberThreads; i++)
+        if (pthread_join(workers[i], NULL))
+            fprintf(stderr, "Can't join thread\n");
     sem_destroy(&sem_prod);
     sem_destroy(&sem_cons);
     DESTROY(numberBuckets);
