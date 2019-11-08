@@ -96,7 +96,7 @@ int insertCommand(char* data) {
     LOCK(commandsLocker);
     if (numberCommands != MAX_COMMANDS) {
         strcpy(inputCommands[(numberCommands + headQueue) % MAX_COMMANDS], data);
-        numberCommands++;
+        ++numberCommands;
         UNLOCK(commandsLocker);
         sem_post(&sem_cons);
         return 1;
@@ -235,9 +235,13 @@ void* applyCommands() {
             exit(EXIT_FAILURE);
         }
         const char* command = removeCommand();
-        if (!strcmp(command, "x")) {
-            headQueue--;
-            numberCommands++;
+        if (!command) {
+            fprintf(stderr, "Error: invalid number of commands\n");
+            exit(EXIT_FAILURE);
+        }
+        if (command[0] == 'x') {
+            headQueue = (headQueue - 1) % MAX_COMMANDS;
+            ++numberCommands;
             UNLOCK(commandsLocker);
             sem_post(&sem_cons);
             break;
@@ -247,24 +251,25 @@ void* applyCommands() {
             iNumber = obtainNewInumber(fs);
         UNLOCK(commandsLocker);
         sem_post(&sem_prod);
-        if (!command)
-            continue;
-        char token;
+        char token = command[0];
         char name[MAX_INPUT_SIZE];
         char rname[MAX_INPUT_SIZE];
-        int numTokens = sscanf(command, "%c %s", &token, name);
+        
+        /**int numTokens = sscanf(command, "%c %s", &token, name);
         if (numTokens != 2) {
             fprintf(stderr, "Error: invalid command in Queue\n");
             exit(EXIT_FAILURE);
-        }
+        }**/
         int searchResult;
         switch (token) {
             case 'c':
+                sscanf(command, "%c %s", &token, name);
                 LOCK(vecLock[hash(name, numberBuckets)]);
                 create(fs, name, iNumber, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
                 break;
             case 'l':
+                sscanf(command, "%c %s", &token, name);
                 LOCK(vecLock[hash(name, numberBuckets)]);
                 searchResult = lookup(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
@@ -274,12 +279,18 @@ void* applyCommands() {
                     printf("%s found with inumber %d\n", name, searchResult);
                 break;
             case 'd':
+                sscanf(command, "%c %s", &token, name);
                 LOCK(vecLock[hash(name, numberBuckets)]);
                 delete(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
                 break;
             case 'r': 
-                numTokens = sscanf(command, "%c %s %s", &token, name, rname);
+                sscanf(command, "%c %s %s", &token, name, rname);
+                /**numTokens = sscanf(command, "%c %s %s", &token, name, rname);
+                if (numTokens != 3) {
+                    fprintf(stderr, "Error: invalid command in Queue\n");
+                    exit(EXIT_FAILURE);
+                }**/
                 commandRename(name, rname);
                 break;
             default:
