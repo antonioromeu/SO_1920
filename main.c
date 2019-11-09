@@ -56,10 +56,15 @@ pthread_rwlock_t* vecLock;
     for (int i = 0; i < A; i++) \
         if (pthread_rwlock_destroy(&vecLock[i])); }
 #else
-#define INIT(A) {}
-#define LOCK(A) {}
-#define UNLOCK(A) {}
-#define DESTROY(A) {}
+pthread_mutex_t commandsLocker;
+#define INIT(A) { \
+    if (pthread_mutex_init(&commandsLocker, NULL)) \
+        exit(EXIT_FAILURE); }
+#define LOCK(A) pthread_mutex_lock(&A)
+#define UNLOCK(A) pthread_mutex_lock(&A)
+#define DESTROY(A) { \
+    if (pthread_mutex_destroy(&commandsLocker)) \
+        exit(EXIT_FAILURE); }
 #endif
 
 static void displayUsage (const char* appName) {
@@ -254,22 +259,19 @@ void* applyCommands() {
         char token = command[0];
         char name[MAX_INPUT_SIZE];
         char rname[MAX_INPUT_SIZE];
-        
-        /**int numTokens = sscanf(command, "%c %s", &token, name);
+        int numTokens = sscanf(command, "%c %s", &token, name);
         if (numTokens != 2) {
             fprintf(stderr, "Error: invalid command in Queue\n");
             exit(EXIT_FAILURE);
-        }**/
+        }
         int searchResult;
         switch (token) {
             case 'c':
-                sscanf(command, "%c %s", &token, name);
                 LOCK(vecLock[hash(name, numberBuckets)]);
                 create(fs, name, iNumber, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
                 break;
             case 'l':
-                sscanf(command, "%c %s", &token, name);
                 LOCK(vecLock[hash(name, numberBuckets)]);
                 searchResult = lookup(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
@@ -279,18 +281,16 @@ void* applyCommands() {
                     printf("%s found with inumber %d\n", name, searchResult);
                 break;
             case 'd':
-                sscanf(command, "%c %s", &token, name);
                 LOCK(vecLock[hash(name, numberBuckets)]);
                 delete(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
                 break;
             case 'r': 
-                sscanf(command, "%c %s %s", &token, name, rname);
-                /**numTokens = sscanf(command, "%c %s %s", &token, name, rname);
+                numTokens = sscanf(command, "%c %s %s", &token, name, rname);
                 if (numTokens != 3) {
                     fprintf(stderr, "Error: invalid command in Queue\n");
                     exit(EXIT_FAILURE);
-                }**/
+                }
                 commandRename(name, rname);
                 break;
             default:
