@@ -57,18 +57,25 @@ pthread_rwlock_t* vecLock;
         if (pthread_rwlock_destroy(&vecLock[i])); }
 #else
 pthread_mutex_t commandsLocker;
+pthread_mutex_t* vecLock;
 #define INIT(A) { \
+    vecLock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t) * A); \
     if (pthread_mutex_init(&commandsLocker, NULL)) \
-        exit(EXIT_FAILURE); }
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if(pthread_mutex_init(&vecLock[i], NULL)) \
+            exit(EXIT_FAILURE); }
 #define LOCK(A) pthread_mutex_lock(&A)
-#define UNLOCK(A) pthread_mutex_lock(&A)
+#define UNLOCK(A) pthread_mutex_unlock(&A)
 #define DESTROY(A) { \
     if (pthread_mutex_destroy(&commandsLocker)) \
-        exit(EXIT_FAILURE); }
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if (pthread_mutex_destroy(&vecLock[i])); }
 #endif
 
 static void displayUsage (const char* appName) {
-    printf("Usage: %s input_filepath output_filepath threads_number\n", appName);
+    printf("Usage: %s input_filepath output_filepath threads_number buckets_number\n", appName);
     exit(EXIT_FAILURE);
 }
 
@@ -85,7 +92,7 @@ static void parseArgs (long argc, char* const argv[]) {
         fprintf(stderr, "Invalid arguments, insert the correct type of arguments\n");
         exit(EXIT_FAILURE);
     }
-    else if (numberThreads > 1) {
+    else if (numberThreads > 1 || numberBuckets > 1) {
         #ifdef MUTEX
         return;
         #endif
@@ -94,6 +101,7 @@ static void parseArgs (long argc, char* const argv[]) {
         #endif
     }
     numberThreads = 1;
+    numberBuckets = 1;
 }
 
 int insertCommand(char* data) {
@@ -101,7 +109,7 @@ int insertCommand(char* data) {
     LOCK(commandsLocker);
     if (numberCommands != MAX_COMMANDS) {
         strcpy(inputCommands[(numberCommands + headQueue) % MAX_COMMANDS], data);
-        ++numberCommands;
+        numberCommands++;
         UNLOCK(commandsLocker);
         sem_post(&sem_cons);
         return 1;
@@ -201,17 +209,11 @@ void* processInput() {
     while (fgets(line, sizeof(line)/sizeof(char), fptr)) {
         char token;
         char name[MAX_INPUT_SIZE];
-        char rname[MAX_INPUT_SIZE];
         int numTokens = sscanf(line, "%c %s", &token, name);
         if (numTokens < 1)
             continue;
         switch (token) {
             case 'r':
-                numTokens = sscanf(line, "%c %s %s", &token, name, rname);
-                if (numTokens == 3) {
-                    insertCommand(line);
-                    break;
-                }
             case 'c':
             case 'l':
             case 'd':
@@ -235,39 +237,36 @@ void* applyCommands() {
     while (1) {
         sem_wait(&sem_cons);
         LOCK(commandsLocker);
-        if (!numberCommands) {
-            fprintf(stderr, "Error: invalid number of commands\n");
-            exit(EXIT_FAILURE);
-        }
         const char* command = removeCommand();
-        if (!command) {
-            fprintf(stderr, "Error: invalid number of commands\n");
-            exit(EXIT_FAILURE);
-        }
-        if (command[0] == 'x') {
+        /**
+	    if (!command) {
+	    printf("!command: %s\n", command);
+	    UNLOCK(commandsLocker);
+            continue;
+	    }
+	    **/
+        if (command[0] == 'x' || !strcmp(command, "x")) {
             headQueue = (headQueue - 1) % MAX_COMMANDS;
-            ++numberCommands;
+            numberCommands = numberCommands + 1;
             UNLOCK(commandsLocker);
             sem_post(&sem_cons);
             break;
         }
-        int iNumber;
-        if (command && command[0] == 'c')
+	    int iNumber;
+        if (command && (command[0] == 'c'))
             iNumber = obtainNewInumber(fs);
-        UNLOCK(commandsLocker);
-        sem_post(&sem_prod);
         char token = command[0];
-        char name[MAX_INPUT_SIZE];
+	    char name[MAX_INPUT_SIZE];
         char rname[MAX_INPUT_SIZE];
         int numTokens = sscanf(command, "%c %s", &token, name);
-        if (numTokens != 2) {
-            fprintf(stderr, "Error: invalid command in Queue\n");
-            exit(EXIT_FAILURE);
-        }
+	    UNLOCK(commandsLocker);
+        sem_post(&sem_prod);
+	    if (numTokens != 2)
+	        continue;
         int searchResult;
         switch (token) {
-            case 'c':
-                LOCK(vecLock[hash(name, numberBuckets)]);
+	        case 'c':
+		        LOCK(vecLock[hash(name, numberBuckets)]);
                 create(fs, name, iNumber, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
                 break;
@@ -285,16 +284,16 @@ void* applyCommands() {
                 delete(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
                 break;
-            case 'r': 
+            case 'r':
                 numTokens = sscanf(command, "%c %s %s", &token, name, rname);
                 if (numTokens != 3) {
-                    fprintf(stderr, "Error: invalid command in Queue\n");
+                    fprintf(stderr, "Error: invalid command in Queue2\n");
                     exit(EXIT_FAILURE);
                 }
                 commandRename(name, rname);
                 break;
             default:
-                fprintf(stderr, "Error: command to apply\n");
+		        fprintf(stderr, "Error: command to apply\n");
                 exit(EXIT_FAILURE);
         }
     }
