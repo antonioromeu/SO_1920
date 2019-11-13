@@ -8,11 +8,13 @@ numbuckets="${4}"
 for test in $(ls ${inputdir}/*.*)
 do
     testname=${test#*/}
-    echo InputFile=${test#*/} NumThreads=1
-    ./tecnicofs-nosync ${inputdir}/${testname} ${outputdir}/${testname%%.*}-1.txt 1 1 | grep -h "TecnicoFS completed in "
-    for threads in $(seq 2 ${numthreads})
+    threadArg=$((numthreads/${numthreads#-}))
+    bucketsArg=$((numbuckets/${numbuckets#-}))
+    echo InputFile=${test#*/} NumThreads=${threadArg}
+    ./tecnicofs-nosync ${inputdir}/${testname} ${outputdir}/${testname%%.*}-${threadArg}.txt ${threadArg} ${numbuckets} | grep -h "TecnicoFS completed in "
+    for threads in $(seq 2 $((numthreads*threadArg)))
     do
-        echo InputFile=${test#*/} NumThreads=${threads}
-        ./tecnicofs-mutex ${inputdir}/${testname} ${outputdir}/${testname%%.*}-${threads}.txt ${threads} ${numbuckets} | grep -h "TecnicoFS completed in "
+        echo InputFile=${test#*/} NumThreads=$((threads*threadArg))
+        ./tecnicofs-mutex ${inputdir}/${testname} ${outputdir}/${testname%%.*}-${threads}.txt $((threads*threadArg)) ${numbuckets} | grep -h "TecnicoFS completed in "
     done
 done

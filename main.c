@@ -21,24 +21,7 @@ int flag = 1;
 sem_t sem_prod;
 sem_t sem_cons;
 
-#ifdef MUTEX
-pthread_mutex_t commandsLocker;
-pthread_mutex_t* vecLock;
-#define INIT(A) { \
-    vecLock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t) * A); \
-    if (pthread_mutex_init(&commandsLocker, NULL)) \
-        exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) \
-        if(pthread_mutex_init(&vecLock[i], NULL)) \
-            exit(EXIT_FAILURE); }
-#define LOCK(A) pthread_mutex_lock(&A)
-#define UNLOCK(A) pthread_mutex_unlock(&A)
-#define DESTROY(A) { \
-    if (pthread_mutex_destroy(&commandsLocker)) \
-        exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) \
-        if (pthread_mutex_destroy(&vecLock[i])); }
-#elif RWLOCK
+#ifdef RWLOCK
 pthread_rwlock_t commandsLocker;
 pthread_rwlock_t* vecLock;
 #define INIT(A) { \
@@ -55,7 +38,7 @@ pthread_rwlock_t* vecLock;
         exit(EXIT_FAILURE); \
     for (int i = 0; i < A; i++) \
         if (pthread_rwlock_destroy(&vecLock[i])); }
-#else
+#else //Caso flag nosync ou mutex
 pthread_mutex_t commandsLocker;
 pthread_mutex_t* vecLock;
 #define INIT(A) { \
@@ -238,14 +221,12 @@ void* applyCommands() {
         sem_wait(&sem_cons);
         LOCK(commandsLocker);
         const char* command = removeCommand();
-        /**
 	    if (!command) {
-	    printf("!command: %s\n", command);
-	    UNLOCK(commandsLocker);
-            continue;
+	        fprintf(stderr, "Error: command is null\n");
+            UNLOCK(commandsLocker);
+            exit(EXIT_FAILURE);
 	    }
-	    **/
-        if (command[0] == 'x' || !strcmp(command, "x")) {
+        if (command[0] == 'x') {
             headQueue = (headQueue - 1) % MAX_COMMANDS;
             numberCommands = numberCommands + 1;
             UNLOCK(commandsLocker);
@@ -253,24 +234,30 @@ void* applyCommands() {
             break;
         }
 	    int iNumber;
-        if (command && (command[0] == 'c'))
-            iNumber = obtainNewInumber(fs);
-        char token = command[0];
+        int searchResult;
+        char token;
 	    char name[MAX_INPUT_SIZE];
         char rname[MAX_INPUT_SIZE];
+        if (command[0] == 'c')
+            iNumber = obtainNewInumber(fs);
         int numTokens = sscanf(command, "%c %s", &token, name);
 	    UNLOCK(commandsLocker);
         sem_post(&sem_prod);
-	    if (numTokens != 2)
-	        continue;
-        int searchResult;
         switch (token) {
 	        case 'c':
+	            if (numTokens != 2) {
+	                fprintf(stderr, "Error: invalid command in Queue\n");
+                    exit(EXIT_FAILURE);
+                }
 		        LOCK(vecLock[hash(name, numberBuckets)]);
                 create(fs, name, iNumber, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
                 break;
             case 'l':
+	            if (numTokens != 2) {
+	                fprintf(stderr, "Error: invalid command in Queue\n");
+                    exit(EXIT_FAILURE);
+                }
                 LOCK(vecLock[hash(name, numberBuckets)]);
                 searchResult = lookup(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
@@ -280,6 +267,10 @@ void* applyCommands() {
                     printf("%s found with inumber %d\n", name, searchResult);
                 break;
             case 'd':
+	            if (numTokens != 2) {
+	                fprintf(stderr, "Error: invalid command in Queue\n");
+                    exit(EXIT_FAILURE);
+                }
                 LOCK(vecLock[hash(name, numberBuckets)]);
                 delete(fs, name, numberBuckets);
                 UNLOCK(vecLock[hash(name, numberBuckets)]);
@@ -287,7 +278,7 @@ void* applyCommands() {
             case 'r':
                 numTokens = sscanf(command, "%c %s %s", &token, name, rname);
                 if (numTokens != 3) {
-                    fprintf(stderr, "Error: invalid command in Queue2\n");
+                    fprintf(stderr, "Error: invalid command in Queue\n");
                     exit(EXIT_FAILURE);
                 }
                 commandRename(name, rname);
