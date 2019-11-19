@@ -182,6 +182,7 @@ void commandRename(char* name, char* rname) {
     }
 }
 
+/*
 void* processInput() {
     FILE* fptr  = fopen(fileInput, "r");
     if (!fptr) {
@@ -215,6 +216,7 @@ void* processInput() {
     insertCommand("x");
     return NULL;
 }
+*/
 
 void* applyCommands() {
     while (1) {
@@ -291,6 +293,7 @@ void* applyCommands() {
     return NULL;
 }
 
+/*
 void applyThread() {
     INIT(numberBuckets);
     pthread_t processor;
@@ -318,6 +321,7 @@ void applyThread() {
     sem_destroy(&sem_cons);
     DESTROY(numberBuckets);
 }
+*/
 
 int main(int argc, char* argv[]) {
     struct timeval start, end;
@@ -325,7 +329,7 @@ int main(int argc, char* argv[]) {
     parseArgs(argc, argv);
     gettimeofday(&start, NULL);
     fs = new_tecnicofs(numberBuckets);
-    applyThread();
+    //applyThread();
     gettimeofday(&end, NULL);
     FILE* fptr = fopen(fileOutput, "w");
     print_tecnicofs_tree(fptr, fs, numberBuckets);
