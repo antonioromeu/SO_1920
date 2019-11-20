@@ -3,7 +3,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-int main(char* address) {
+int createSocketStream(char* address) {
     int sockfd, newsockfd, clilen, childpid, servlen;
     struct sockaddr_un cli_addr, serv_addr;
     if ((sockfd = socket(AF_UNIX,SOCK_STREAM,0) ) < 0)
@@ -25,7 +25,7 @@ int main(char* address) {
             err_dump("Server: fork error");
         else if (childpid == 0) {
             close(sockfd);
-            /*faz merdas*/
+            /*faz cenas*/
             exit(0);
         }
     close(newsockfd);
