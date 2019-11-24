@@ -4,26 +4,29 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include "fs.h"
 
 #define MAX_COMMANDS 10
 #define MAX_INPUT_SIZE 100
+#define MAX_FILES 5
 
 tecnicofs* fs;
-char* fileInput = NULL;
+char* socketName = NULL;
 char* fileOutput = NULL;
 char inputCommands[MAX_COMMANDS][MAX_INPUT_SIZE];
 int numberCommands = 0;
 int numberThreads = 0;
 int numberBuckets = 1;
 int headQueue = 0;
-int flag = 1;
+int socket = 1;
 sem_t sem_prod;
 sem_t sem_cons;
-
-#ifdef RWLOCK
 pthread_rwlock_t commandsLocker;
 pthread_rwlock_t* vecLock;
+
 #define INIT(A) { \
     vecLock = (pthread_rwlock_t*) malloc(sizeof(pthread_rwlock_t) * A); \
     if (pthread_rwlock_init(&commandsLocker, NULL)) \
@@ -38,24 +41,6 @@ pthread_rwlock_t* vecLock;
         exit(EXIT_FAILURE); \
     for (int i = 0; i < A; i++) \
         if (pthread_rwlock_destroy(&vecLock[i])); }
-#else //Caso flag nosync ou mutex
-pthread_mutex_t commandsLocker;
-pthread_mutex_t* vecLock;
-#define INIT(A) { \
-    vecLock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t) * A); \
-    if (pthread_mutex_init(&commandsLocker, NULL)) \
-        exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) \
-        if(pthread_mutex_init(&vecLock[i], NULL)) \
-            exit(EXIT_FAILURE); }
-#define LOCK(A) pthread_mutex_lock(&A)
-#define UNLOCK(A) pthread_mutex_unlock(&A)
-#define DESTROY(A) { \
-    if (pthread_mutex_destroy(&commandsLocker)) \
-        exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) \
-        if (pthread_mutex_destroy(&vecLock[i])); }
-#endif
 
 static void displayUsage (const char* appName) {
     printf("Usage: %s input_filepath output_filepath threads_number buckets_number\n", appName);
@@ -63,28 +48,12 @@ static void displayUsage (const char* appName) {
 }
 
 static void parseArgs (long argc, char* const argv[]) {
-    if (argc != 5) {
+    if (argc != 4) {
         fprintf(stderr, "Invalid format:\n");
         displayUsage(argv[0]);
     }
-    fileInput = argv[1];
+    socketName = argv[1];
     fileOutput = argv[2];
-    numberThreads = atoi(argv[3]);
-    numberBuckets = atoi(argv[4]);
-    if (!numberThreads || !numberBuckets || numberThreads < 1 || numberBuckets < 1) {
-        fprintf(stderr, "Invalid arguments, insert the correct type of arguments\n");
-        exit(EXIT_FAILURE);
-    }
-    else if (numberThreads > 1 || numberBuckets > 1) {
-        #ifdef MUTEX
-        return;
-        #endif
-        #ifdef RWLOCK
-        return;
-        #endif
-    }
-    numberThreads = 1;
-    numberBuckets = 1;
 }
 
 int insertCommand(char* data) {
@@ -182,42 +151,6 @@ void commandRename(char* name, char* rname) {
     }
 }
 
-/*
-void* processInput() {
-    FILE* fptr  = fopen(fileInput, "r");
-    if (!fptr) {
-        fprintf(stderr, "Error: Could not read %s\n", fileInput);
-        exit(EXIT_FAILURE);
-    }
-    char line[MAX_INPUT_SIZE];
-    while (fgets(line, sizeof(line)/sizeof(char), fptr)) {
-        char token;
-        char name[MAX_INPUT_SIZE];
-        int numTokens = sscanf(line, "%c %s", &token, name);
-        if (numTokens < 1)
-            continue;
-        switch (token) {
-            case 'r':
-            case 'c':
-            case 'l':
-            case 'd':
-                if (numTokens != 2)
-                    errorParse();
-                else if (insertCommand(line))
-                    break;
-                return NULL;
-            case '#':
-                break;
-            default:
-                errorParse();
-        }
-    }
-    fclose(fptr);
-    insertCommand("x");
-    return NULL;
-}
-*/
-
 void* applyCommands() {
     while (1) {
         sem_wait(&sem_cons);
@@ -293,48 +226,54 @@ void* applyCommands() {
     return NULL;
 }
 
-/*
-void applyThread() {
-    INIT(numberBuckets);
-    pthread_t processor;
-    pthread_t workers[numberThreads];
-    sem_init(&sem_prod, 0, MAX_COMMANDS);
-    sem_init(&sem_cons, 0, 0);
-    int err1 = pthread_create(&processor, NULL, processInput, NULL);
-    if (err1 != 0) {
-      fprintf(stderr, "Can't create thread\n");
-      exit(EXIT_FAILURE);
-    }
-    for (int i = 0; i < numberThreads; i++) {
-        int err2 = pthread_create(&workers[i], NULL, applyCommands, NULL);
-        if (err2 != 0) {
-            fprintf(stderr, "Can't create thread\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-    if (pthread_join(processor, NULL))
-        fprintf(stderr, "Can't join thread\n");
-    for (int i = 0; i < numberThreads; i++)
-        if (pthread_join(workers[i], NULL))
-            fprintf(stderr, "Can't join thread\n");
-    sem_destroy(&sem_prod);
-    sem_destroy(&sem_cons);
-    DESTROY(numberBuckets);
+int createSocketStream(char* address) {
+    int sockfd;
+    struct sockaddr_un serv_addr;
+    if ((sockfd = socket(AF_UNIX,SOCK_STREAM,0) ) < 0) 
+        err_dump("Server: can't open stream socket");
+    unlink(address); 
+    bzero((char*) &serv_addr, sizeof(serv_addr)); 
+    socket = sockfd; 
+    serv_addr.sun_family = AF_UNIX; 
+    strcpy(serv_addr.sun_path, address); 
+    servlen = strlen(serv_addr.sun_path) + sizeof(serv_addr.sun_family); 
+    if (bind(sockfd, (struct sockaddr*) &serv_addr, servlen) < 0)
+        err_dump("Server, can't bind local address");
+    listen(sockfd, MAX_FILES);
 }
-*/
+ 
+int acceptSocket() {
+    int newsockfd, clilen, childpid, servlen;
+    struct sockaddr_un cli_addr;
+    for (;;) {
+        clilen = sizeof(cli_addr);
+        newsockfd = accept(socket, (struct sockaddr*) &cli_addr, &clilen);
+        if (newsockfd < 0)
+            err_dump("Server: accept error");
+        if ((childpid = fork()) < 0)
+            err_dump("Server: fork error");
+        else if (childpid == 0) {
+            close(socket); 
+            /*faz cenas*/ 
+            exit(0); 
+        } 
+    close(newsockfd); 
+    }
+}
 
 int main(int argc, char* argv[]) {
     struct timeval start, end;
     double seconds, micros;
     parseArgs(argc, argv);
     gettimeofday(&start, NULL);
+    inode_table_init();
     fs = new_tecnicofs(numberBuckets);
-    //applyThread();
     gettimeofday(&end, NULL);
     FILE* fptr = fopen(fileOutput, "w");
     print_tecnicofs_tree(fptr, fs, numberBuckets);
     fclose(fptr);
     free_tecnicofs(fs, numberBuckets);
+    inode_table_destroy();
     seconds = (double) (end.tv_sec - start.tv_sec);
     micros = (double) ((seconds + (double) (end.tv_usec - start.tv_usec)/1000000));
     printf("TecnicoFS completed in %.4f seconds.\n", micros);

@@ -2,7 +2,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-int socket;
+int socket = 0;
 
 int tfsMount(char* address) {
     int sockfd, dim_serv;
