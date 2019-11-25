@@ -1,114 +1,113 @@
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/types.h>
+#include <math.h>
+#include "tecnicofs-client-api.h"
+#include "tecnicofs-api-constants.h"
 
-
-int socket = 0;
+int clientSocket = -1;
 
 int tfsMount(char* address) {
     int sockfd, dim_serv;
     struct sockaddr_un end_serv;
-    if ((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
-        perror("Erro ao criar socket clinte");
-    socket = sockfd;
+    if ((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
+        perror("Erro ao criar clientSocket clinte\n");
+        exit(EXIT_FAILURE);
+    }
+    clientSocket = sockfd;
     bzero((char*) &end_serv, sizeof(end_serv));
     end_serv.sun_family = AF_UNIX;
     strcpy(end_serv.sun_path, address);
     dim_serv = strlen(end_serv.sun_path) + sizeof(end_serv.sun_family);
-    if (connect(sockfd, (struct sockaddr*) &end_serv, dim_serv) < 0)
-        perror("Error ao fazer connect no client");
+    if (connect(sockfd, (struct sockaddr*) &end_serv, dim_serv) < 0) {
+        perror("Error ao fazer connect no client\n");
+        exit(EXIT_FAILURE);
+    }
     return 0;
 }
 
-int tfsCreate(char* filename, permission ownerPermissons, permission othersPermissions) {}
-
-int tfsDelete(char *filename) {}
-
-int tfsRename(char *filenameOld, char *filenameNew) {}
-
-int tfsOpen(char *filename, permission mode) {}
-
-int tfsClose(int fd) {}
-
-int tfsRead(int fd, char *buffer, int len) {}
-
-int tfsWrite(int fd, char *buffer, int len) {}
-
-int tfsUnmout() {}
-
-void envia_recebe_stream(FILE* fp, int sockfd) {
-    int n;
-    char buffer[MAXLINHA + 1];
-    if ((fgets(buffer, MAXLINHA, fp) == NULL) && ferror(fp))
-        perror("Error cliente ao ler input");
-    char* command = buffer[0];
-    int numTokens = 0;
-    int fd, len;
-    char* filename,
-    permissions ownerPermissions, otherPermissions;
-    switch (command) {
-        case 'c':
-            numTokens = sscanf(buffer, "%c %s %d%d", &command, filename, ownerPermissions, othersPermissions);
-            if (numTokens != 4) {
-                perror("Erro no c");
-                exit(EXIT_FAILURE);
-            }
-            tfsCreate(filename, ownerPermissions, otherPermissions);
-            break;
-        case 'd':
-            numTokens = sscanf(buffer, "%c %s", &command, filename);
-            if (numTokens != 2) {
-                perror("Erro no d");
-                exit(EXIT_FAILURE);
-            }
-            tfsDelete(filename);
-            break;
-        case 'r':
-            numTokens = sscanf(buffer, "%c %s %s", &command, oldFileName, newFileName);
-            if (numTokens != 3) {
-                perror("Erro no r");
-                exit(EXIT_FAILURE);
-            }
-            tfsRename(filename, ownerPermissions, otherPermissions);
-            break;
-        case 'o':
-            numTokens = sscanf(buffer, "%c %s %d", &command, filename, permission);
-            if (numTokens != 3) {
-                perror("Erro no o");
-                exit(EXIT_FAILURE);
-            }
-            tfsOpen(filename, premission);
-            break;
-        case 'x':
-            numTokens = sscanf(buffer, "%c %d", &command, fd);
-            if (numTokens != 2) {
-                perror("Erro no x");
-                exit(EXIT_FAILURE)x;
-            }
-            tfsClose(fd);
-            break;
-        case 'l': 
-            numTokens = sscanf(buffer, "%c %d %s %d", &command, buffer, len);
-            if (numTokens != 4) {
-                perror("Erro no l");
-                exit(EXIT_FAILURE);
-            }
-            tfsRead(filename, ownerPErmissions, otherPermissions);
-            break;
-        case 'w':
-            numTokens = sscanf(buffer, "%c %d %s %d", &command, fd, buffer, len);
-            if (numTokens != 4) {
-                perror("Erro no w");
-                exit(EXIT_FAILURE);
-            }
-            tfsWrite(filename, ownerPErmissions, otherPermissions);
-            break;
-        default:
-            perror("Erro no command");
-            exit(EXIT_FAILURE);
-        }
+int tfsCreate(char* filename, permission ownerPermissions, permission othersPermissions) {
+    int n = strlen(filename) + 6;
+    char* buffer = (char*) malloc(sizeof(char) * n);
+    snprintf(buffer, n, "c %s %d%d", filename, ownerPermissions, othersPermissions);
+    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer))
+        perror("Error cliente no write/create\n");
+    free(buffer);
+    return 0;
 }
 
-int main() {
+int tfsDelete(char *filename) {
+    int n = strlen(filename) + 3;
+    char* buffer = (char*) malloc(sizeof(char) * n);
+    snprintf(buffer, n, "d %s", filename);
+    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer))
+        perror("Error cliente no write/delete\n");
+    free(buffer);
+    return 0;
+}
+
+int tfsRename(char *filename, char *newFilename) {
+    int n = strlen(filename) + strlen(newFilename) + 4;
+    char* buffer = (char*) malloc(sizeof(char) * n);
+    snprintf(buffer, n, "r %s %s", filename, newFilename);
+    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
+        perror("Error cliente no write/rename\n");
+    free(buffer);
+    return 0;
+}
+
+int tfsOpen(char *filename, permission mode) {
+    int n = strlen(filename) + 5;
+    char* buffer = (char*) malloc(sizeof(char) * n);
+    snprintf(buffer, n, "o %s %d", filename, mode);
+    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
+        perror("Error cliente no write/open\n");
+    free(buffer);
+    return 0;
+}
+
+int tfsClose(int fd) { 
+    int nDigits = floor(log10(abs(fd))) + 1;    
+    int n = nDigits + 3;
+    char* buffer = (char*) malloc(sizeof(char) * n);
+    snprintf(buffer, n, "x %d", fd);
+    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
+        perror("Error cliente no write/close\n");
+    free(buffer);
+
+int tfsRead(int fd, char* receiveBuffer, int len) {
+    int nDigits = floor(log10(abs(fd))) + 1;    
+    int n = nDigits + len + 4;
+    char* buffer = (char*) malloc(sizeof(char) * n);
+    snprintf(buffer, n, "l %d %d", fd, len);
+    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
+        perror("Error cliente no write/read\n");
+    free(buffer);
+    return 0;
+}
+
+int tfsWrite(int fd, char* sendBuffer, int len) { 
+    int nDigits = floor(log10(abs(fd))) + 1;    
+    int n = nDigits + len + 4;
+    char* buffer = (char*) malloc(sizeof(char) * n);
+    snprintf(buffer, n, "w %d %s", fd, sendBuffer);
+    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer))
+        perror("Error cliente no write/write");
+    free(buffer);
+    return 0;
+}
+
+
+int tfsUnmout() {
+    if (clientSocket < 0) {
+        perror("Socket nao foi criado\n");
+        exit(EXIT_FAILURE);
+    }
+    if (close(clientSocket))
+        perror("Error no unmout\n");
     return 0;
 }
