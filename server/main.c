@@ -24,23 +24,16 @@ int headQueue = 0;
 int socket = 1;
 sem_t sem_prod;
 sem_t sem_cons;
-pthread_rwlock_t commandsLocker;
-pthread_rwlock_t* vecLock;
+pthread_rwlock_t locker;
 
-#define INIT(A) { \
-    vecLock = (pthread_rwlock_t*) malloc(sizeof(pthread_rwlock_t) * A); \
-    if (pthread_rwlock_init(&commandsLocker, NULL)) \
+#define INIT { \
+    if (pthread_rwlock_init(&locker, NULL)) \
         exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) \
-        if (pthread_rwlock_init(&vecLock[i], NULL)) \
-            exit(EXIT_FAILURE); }
-#define LOCK(A) pthread_rwlock_wrlock(&A)
-#define UNLOCK(A) pthread_rwlock_unlock(&A)
-#define DESTROY(A) { \
-    if (pthread_rwlock_destroy(&commandsLocker)) \
+#define LOCK pthread_rwlock_wrlock(&locker)
+#define UNLOCK pthread_rwlock_unlock(&locker)
+#define DESTROY { \
+    if (pthread_rwlock_destroy(&locker)) \
         exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) \
-        if (pthread_rwlock_destroy(&vecLock[i])); }
 
 static void displayUsage (const char* appName) {
     printf("Usage: %s input_filepath output_filepath threads_number buckets_number\n", appName);
@@ -59,16 +52,16 @@ static void parseArgs (long argc, char* const argv[]) {
 int insertCommand(char* data) {
     sem_wait(&sem_prod); 
     lock_inode_table();
-    //LOCK(commandsLocker);
+    //LOCK(locker);
     if (numberCommands != MAX_COMMANDS) {
         //inode_create(socket, 
         strcpy(inputCommands[(numberCommands + headQueue) % MAX_COMMANDS], data);
         numberCommands++;
-        UNLOCK(commandsLocker);
+        UNLOCK(locker);
         sem_post(&sem_cons);
         return 1;
     }
-    UNLOCK(commandsLocker);
+    UNLOCK(locker);
     return 0;
 }
 
@@ -153,81 +146,6 @@ void commandRename(char* name, char* rname) {
     }
 }
 
-void* applyCommands() {
-    while (1) {
-        sem_wait(&sem_cons);
-        LOCK(commandsLocker);
-        const char* command = removeCommand();
-	    if (!command) {
-	        fprintf(stderr, "Error: command is null\n");
-            UNLOCK(commandsLocker);
-            exit(EXIT_FAILURE);
-	    }
-        if (command[0] == 'x') {
-            headQueue = (headQueue - 1) % MAX_COMMANDS;
-            numberCommands = numberCommands + 1;
-            UNLOCK(commandsLocker);
-            sem_post(&sem_cons);
-            break;
-        }
-	    int iNumber;
-        int searchResult;
-        char token;
-	    char name[MAX_INPUT_SIZE];
-        char rname[MAX_INPUT_SIZE];
-        if (command[0] == 'c')
-            iNumber = obtainNewInumber(fs);
-        int numTokens = sscanf(command, "%c %s", &token, name);
-	    UNLOCK(commandsLocker);
-        sem_post(&sem_prod);
-        switch (token) {
-	        case 'c':
-	            if (numTokens != 2) {
-	                fprintf(stderr, "Error: invalid command in Queue\n");
-                    exit(EXIT_FAILURE);
-                }
-		        LOCK(vecLock[hash(name, numberBuckets)]);
-                create(fs, name, iNumber, numberBuckets);
-                UNLOCK(vecLock[hash(name, numberBuckets)]);
-                break;
-            case 'l':
-	            if (numTokens != 2) {
-	                fprintf(stderr, "Error: invalid command in Queue\n");
-                    exit(EXIT_FAILURE);
-                }
-                LOCK(vecLock[hash(name, numberBuckets)]);
-                searchResult = lookup(fs, name, numberBuckets);
-                UNLOCK(vecLock[hash(name, numberBuckets)]);
-                if (!searchResult)
-                    printf("%s not found\n", name);
-                else
-                    printf("%s found with inumber %d\n", name, searchResult);
-                break;
-            case 'd':
-	            if (numTokens != 2) {
-	                fprintf(stderr, "Error: invalid command in Queue\n");
-                    exit(EXIT_FAILURE);
-                }
-                LOCK(vecLock[hash(name, numberBuckets)]);
-                delete(fs, name, numberBuckets);
-                UNLOCK(vecLock[hash(name, numberBuckets)]);
-                break;
-            case 'r':
-                numTokens = sscanf(command, "%c %s %s", &token, name, rname);
-                if (numTokens != 3) {
-                    fprintf(stderr, "Error: invalid command in Queue\n");
-                    exit(EXIT_FAILURE);
-                }
-                commandRename(name, rname);
-                break;
-            default:
-		        fprintf(stderr, "Error: command to apply\n");
-                exit(EXIT_FAILURE);
-        }
-    }
-    return NULL;
-}
-
 int createSocket(char* address) {
     int sockfd;
     struct sockaddr_un serv_addr;
@@ -244,7 +162,7 @@ int createSocket(char* address) {
     listen(sockfd, MAX_FILES);
 }
  
-int mount() {
+int treatSocket() {
     int newsockfd, clilen, childpid, servlen;
     struct sockaddr_un cli_addr;
     pthread_t tid;
@@ -257,24 +175,119 @@ int mount() {
             err_dump("Server: fork error");
         else if (childpid == 0) {
             close(socket);
-            pthread_create(&tid, NULL, trata_cliente_stream, novosockfd);
+            inode_t fich[5];
+            pthread_create(&tid, NULL, trata_cliente_stream, novosockfd, fich);
             exit(0);
         }
     close(newsockfd); 
     }
 }
 
-void trata_cliente_stream(int sockfd) {
+int open(char* filename, int mode, inode_t[] fich) {
+    int iNumber = lookup(fs, filename, numBuckets);
+    inode_t openNode = NULL;
+    for (int i = 0; i < 5; i++) {
+        if (fich[i] == NULL)
+            break;
+        exit(EXIT_FAILURE);
+    }
+    if (mode == 0)
+        exit(EXIT_FAILURE);
+    openNode = (inode_t) malloc(sizeof(struct inode_t));
+    if(inode_get(iNumber, openNode.owner, openNode.ownerPermissions, openNode.otherPermissions, openNode.fileContent, strlen(openNode.fileContent)) == -1) {
+        perror("Nao leu\n");
+        exit(EXIT_FAILURE);
+    }
+    fich[i] = openNode;
+    
+}
+
+int close(int fd) {
+    
+}
+
+void trata_cliente_stream(int sockfd, inode_t[] fich) {
     int n = 0;
+    int numTokens = 0;
+    int fd, len, mode, inumber;
     char buffer[MAXLINHA + 1];
+    char command = NULL;
+    char filename, newFilename, sendBuffer;
     pthread_t tid;
     n = read(sockfd, buffer, MAXLINHA + 1);
     if (n < 0)
         perror("Erro servidor no read");
-    insertCommand(buffer);
-    applyCommands();
-    if (write(sockfd, buffer, n) != n)
-        perror("Erro servidor no write");
+    token = buffer[0];
+    switch (token) {
+        case 'c':
+            numTokens = sscanf(buffer, "%c %d %d", command, ownerPermissions, othersPermissions);
+            if (numTokens != 3){
+                perror("erro no comando\n");
+                exit(EXIT_FAILURE);
+            }
+            LOCK;
+            iNumber = obtainNewInumber(fs);
+            create(fs, name, iNumber, numberBuckets);
+            UNLOCK;
+            inode_create(sockfd, (permission) ownerPremissions, (permission) othersPermissions);
+            break;    
+        case 'd':
+            numTokens = sscanf(buffer, "%d %s", command, filename);
+            if (numTokens != 2) {
+                perror("erro no comando\n");
+                exit(EXIT_FAILURE);
+            }
+            LOCK;
+            delete(fs, filename, numberBuckets);
+            inumber = lookup(fs, filename, numBuckets);
+            UNLOCK;
+            inode_delete(inumber);
+            break;
+        case 'r':
+            numTokens = sscanf(buffer, "%c %s %s", command, filename, newFilename);
+            if (numTokens != 3) {
+                perror("erro no comando\n");
+                exit(EXIT_FAILURE);
+            }
+            LOCK;
+            commandRename(name, rname);
+            UNLOCK;
+            break;
+        case 'o':
+            numTokens = sscanf(buffer, "%c %s %d", command, filename, mode);
+            if (numTokens != 3) {
+                perror("erro no comando");
+                exit(EXIT_FAILURE);
+            }
+            open(filename, mode);
+            break;
+        case 'x':
+            numTokens = sscanf(buffer, "%c %d", command, fd);
+            if (numTokens != 2) {
+                perror("erro no comando\n");
+                exit(EXIT_FAILURE);
+            }
+            close(fd);
+            break;
+        case 'l':
+            numTokens = sscanf(buffer, "%c %d %d", command, fd, len);
+            if (numTokens != 3) {
+                perror("erro no comando\n");
+                exit(EXIT_FAILURE);
+            }
+            read(fd, buffer, len);
+            break;
+        case 'w':
+            numTokens = sscanf(buffer, "%c %d %s", command, fd, sendBuffer);
+            if (numTokens != 3) {
+                perror("erro no comando\n");
+                exit(EXIT_FAILURE);
+            }
+            write(fd, buffer, len);
+            break;
+        default:
+            perror("Erro default\n");
+    }
 }
 
 int main(int argc, char* argv[]) {
