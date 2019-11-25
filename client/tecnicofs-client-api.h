@@ -3,7 +3,6 @@
 
 #include "tecnicofs-api-constants.h"
 
-
 int tfsCreate(char *filename, permission ownerPermissions, permission othersPermissions);
 int tfsDelete(char *filename);
 int tfsRename(char *filenameOld, char *filenameNew);

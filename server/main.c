@@ -58,8 +58,10 @@ static void parseArgs (long argc, char* const argv[]) {
 
 int insertCommand(char* data) {
     sem_wait(&sem_prod); 
-    LOCK(commandsLocker);
+    lock_inode_table();
+    //LOCK(commandsLocker);
     if (numberCommands != MAX_COMMANDS) {
+        //inode_create(socket, 
         strcpy(inputCommands[(numberCommands + headQueue) % MAX_COMMANDS], data);
         numberCommands++;
         UNLOCK(commandsLocker);
@@ -226,7 +228,7 @@ void* applyCommands() {
     return NULL;
 }
 
-int createSocketStream(char* address) {
+int createSocket(char* address) {
     int sockfd;
     struct sockaddr_un serv_addr;
     if ((sockfd = socket(AF_UNIX,SOCK_STREAM,0) ) < 0) 
@@ -242,9 +244,10 @@ int createSocketStream(char* address) {
     listen(sockfd, MAX_FILES);
 }
  
-int acceptSocket() {
+int mount() {
     int newsockfd, clilen, childpid, servlen;
     struct sockaddr_un cli_addr;
+    pthread_t tid;
     for (;;) {
         clilen = sizeof(cli_addr);
         newsockfd = accept(socket, (struct sockaddr*) &cli_addr, &clilen);
@@ -253,12 +256,25 @@ int acceptSocket() {
         if ((childpid = fork()) < 0)
             err_dump("Server: fork error");
         else if (childpid == 0) {
-            close(socket); 
-            /*faz cenas*/ 
-            exit(0); 
-        } 
+            close(socket);
+            pthread_create(&tid, NULL, trata_cliente_stream, novosockfd);
+            exit(0);
+        }
     close(newsockfd); 
     }
+}
+
+void trata_cliente_stream(int sockfd) {
+    int n = 0;
+    char buffer[MAXLINHA + 1];
+    pthread_t tid;
+    n = read(sockfd, buffer, MAXLINHA + 1);
+    if (n < 0)
+        perror("Erro servidor no read");
+    insertCommand(buffer);
+    applyCommands();
+    if (write(sockfd, buffer, n) != n)
+        perror("Erro servidor no write");
 }
 
 int main(int argc, char* argv[]) {
