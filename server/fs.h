@@ -12,7 +12,7 @@ typedef struct tecnicofs {
 int obtainNewInumber(tecnicofs* fs);
 tecnicofs* new_tecnicofs(int numberBuckets);
 void free_tecnicofs(tecnicofs* fs, int numberBuckets);
-void create(tecnicofs* fs, char* name, int inumber, int numberBuckets);
+void createFS(tecnicofs* fs, char* name, int inumber, int numberBuckets);
 void delete(tecnicofs* fs, char* name, int numberBuckets);
 int lookup(tecnicofs* fs, char* name, int numberBuckets);
 void print_tecnicofs_tree(FILE* fp, tecnicofs* fs, int numberBuckets);
