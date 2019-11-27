@@ -115,11 +115,8 @@ void commandRename(char* name, char* rname) {
 int createSocket(char* address) {
     int sockfd, servlen;
     struct sockaddr_un serv_addr;
-    if ((sockfd = socket(AF_UNIX,SOCK_STREAM,0) ) < 0) {
+    if ((sockfd = socket(AF_UNIX,SOCK_STREAM,0) ) < 0)
         err_dump("Server: can't open stream socket");
-        //perror("Server: can't open stream socket");
-        //exit(EXIT_FAILURE);
-    }
     unlink(address); 
     bzero((char*) &serv_addr, sizeof(serv_addr)); 
     sockerServer = sockfd; 
@@ -168,10 +165,11 @@ int close(int fd) {
 
 int read(int fd, char* buffer, int len) {
     int iNumber;
+    inode_t* openNode = NULL;
     for (int i = 0; i < 5; i++) {
         if (fich[i].fd == fd) {
-            openNode = (inode_t) malloc(sizeof(struct inode_t));
-            if (inode_get(fich[i]->iNumber, openNode->owner, openNode->ownerPermissions, openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1) {
+            openNode = (inode_t*) malloc(sizeof(struct inode_t));
+            if (inode_get(fich[i]->iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1) {
                 perror("Nao leu\n");
                 exit(EXIT_FAILURE);
             }
@@ -179,7 +177,7 @@ int read(int fd, char* buffer, int len) {
                 perror("Demasiado big eheh\n");
                 exit(EXIT_FAILURE);
             }
-            if ((openNode->onwer == getuid() && (openNode->ownerPermissions == 1 || openNode->ownerPermissions == 3)) || (openNode->onwer != getuid() && (openNode->othersPermissions == 1 || openNode->othersPermissions == 3))) {
+            if ((openNode->owner == getuid() && (openNode->ownerPermissions == 1 || openNode->ownerPermissions == 3)) || (openNode->owner != getuid() && (openNode->othersPermissions == 1 || openNode->othersPermissions == 3))) {
                 strcpy(buffer, openNode->fileContent);
                 return (strlen(buffer) - 1);
             }
@@ -194,9 +192,10 @@ int read(int fd, char* buffer, int len) {
 }
 
 int write(int fd, char* buffer, int len) {
+    inode_t* openNode = NULL;
     for (int i = 0; i < 5; i++) {
         if (fich[i].fd == fd) {
-            if ((openNode->onwer == getuid() && (openNode->ownerPermissions == 2 || openNode->ownerPermissions == 3)) || (openNode->onwer != getuid() && (openNode->othersPermissions == 2 || openNode->othersPermissions == 3))) {
+            if ((openNode->owner == getuid() && (openNode->ownerPermissions == 2 || openNode->ownerPermissions == 3)) || (openNode->owner != getuid() && (openNode->othersPermissions == 2 || openNode->othersPermissions == 3))) {
                 if (inode_set(fich[i].iNumber, buffer, len) == -1) {
                     perror("Nao settou\n");
                     exit(EXIT_FAILURE);
@@ -230,12 +229,9 @@ int create(char* filename, int ownerPremissions, int othersPermissions) {
 }
 
 void trata_cliente_stream(int sockfd, int[] fich) {
-    int n = 0;
-    int numTokens = 0;
-    int fd, len, mode, inumber;
-    char buffer[MAXLINHA + 1];
-    char command = NULL;
-    char filename, newFilename, sendBuffer;
+    int n, numTokens, fd, len, mode, inumber, ownerPermissions, othersPermissions;
+    char token;
+    char* filename, newFilename, buffer, sendBuffer;
     pthread_t tid;
     n = read(sockfd, buffer, MAXLINHA + 1);
     if (n < 0)
@@ -243,37 +239,37 @@ void trata_cliente_stream(int sockfd, int[] fich) {
     token = buffer[0];
     switch (token) {
         case 'c':
-            numTokens = sscanf(buffer, "%c %d %d", command, ownerPermissions, othersPermissions);
-            if (numTokens != 3){
+            numTokens = sscanf(&buffer, "%c %s %d%d", token, filename, ownerPermissions, othersPermissions);
+            if (numTokens != 4){
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
             }
-            create(filename, owenerPermissions, othersPermissions);
+            create(filename, ownerPermissions, othersPermissions);
             break;    
         case 'd':
-            numTokens = sscanf(buffer, "%d %s", command, filename);
+            numTokens = sscanf(&buffer, "%c %s", token, filename);
             if (numTokens != 2) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
             }
             LOCK;
-            inumber = lookup(fs, filename, numBuckets);
+            inumber = lookup(fs, filename, numberBuckets);
             delete(fs, filename, numberBuckets);
             UNLOCK;
             inode_delete(inumber);
             break;
         case 'r':
-            numTokens = sscanf(buffer, "%c %s %s", command, filename, newFilename);
+            numTokens = sscanf(&buffer, "%c %s %s", token, filename, newFilename);
             if (numTokens != 3) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
             }
             LOCK;
-            commandRename(name, rname);
+            commandRename(filename, newFilename);
             UNLOCK;
             break;
         case 'o':
-            numTokens = sscanf(buffer, "%c %s %d", command, filename, mode);
+            numTokens = sscanf(&buffer, "%c %s %d", token, filename, mode);
             if (numTokens != 3) {
                 perror("erro no comando");
                 exit(EXIT_FAILURE);
@@ -287,11 +283,11 @@ void trata_cliente_stream(int sockfd, int[] fich) {
             fd = open(filename, mode);
             fichNode fN = NULL;
             fN.fd = fd;
-            fN.iNumber = lookup(fs, filename, numBucket);
+            fN.iNumber = lookup(fs, filename, numberBuckets);
             fich[i] = fN;
             break;
         case 'x':
-            numTokens = sscanf(buffer, "%c %d", command, fd);
+            numTokens = sscanf(&buffer, "%c %d", command, fd);
             if (numTokens != 2) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
@@ -299,7 +295,7 @@ void trata_cliente_stream(int sockfd, int[] fich) {
             close(fd);
             break;
         case 'l':
-            numTokens = sscanf(buffer, "%c %d %d", command, fd, len);
+            numTokens = sscanf(&buffer, "%c %d %d", command, fd, len);
             if (numTokens != 3) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
@@ -307,7 +303,7 @@ void trata_cliente_stream(int sockfd, int[] fich) {
             read(fd, buffer, len);
             break;
         case 'w':
-            numTokens = sscanf(buffer, "%c %d %s", command, fd, sendBuffer);
+            numTokens = sscanf(&buffer, "%c %d %s", command, fd, sendBuffer);
             if (numTokens != 3) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);

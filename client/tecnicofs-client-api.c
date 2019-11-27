@@ -101,7 +101,6 @@ int tfsWrite(int fd, char* sendBuffer, int len) {
     return 0;
 }
 
-
 int tfsUnmout() {
     if (clientSocket < 0) {
         perror("Socket nao foi criado\n");
