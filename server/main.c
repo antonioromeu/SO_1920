@@ -22,7 +22,7 @@ char* socketName = NULL;
 char* fileOutput = NULL;
 int numberBuckets = 1;
 int listenningSocket = 1;
-int socketServer2 = 0;
+int socketServer = 0;
 sem_t sem_prod;
 sem_t sem_cons;
 pthread_rwlock_t locker;
@@ -87,7 +87,7 @@ void renameFile(char* name, char* rname) {
 }
 
 void createSocket(char* address) {
-    int socketServer, servlen;
+    int servlen;
     struct sockaddr_un serv_addr;
     if ((socketServer = socket(AF_UNIX,SOCK_STREAM,0) ) < 0) {
         perror("Servidor nao consegue stream sockey eheh\n");
@@ -102,7 +102,6 @@ void createSocket(char* address) {
         perror("Servidor nao consegue bindar eheh\n");
         exit(EXIT_FAILURE);
     }
-    socketServer2 = socketServer;
     listen(socketServer, MAX_CONNECTIONS_WAITING);
 }
 
@@ -250,15 +249,16 @@ int deleteFile(char* filename, fileNode files[], int clientID) {
 }
 
 void* treatClient(args* Args) {
-    int n, numTokens, fd, len, mode, ownerPermissions, othersPermissions;
+    int numTokens, fd, len, mode, ownerPermissions, othersPermissions;
     int acceptedSocket = Args->acceptedSocket;
     fileNode* files = (fileNode*) malloc(sizeof(struct fileNode) * MAX_FILES);
     files = Args->files;
     int clientID = Args->userID;
-    char token, *filename = NULL, *newFilename = NULL, *buffer = NULL, *sendBuffer = NULL;
-    n = read(acceptedSocket, buffer, MAX_BUFFER_SZ + 1);
-    if (n < 0)
-        perror("Erro servidor no read");
+    char token, *filename = NULL, *newFilename = NULL, *sendBuffer = NULL;
+    char* buffer = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
+    read(acceptedSocket, buffer, MAX_BUFFER_SZ + 1);
+    printf("ehe\n");
+    printf("%s\n", buffer);
     token = buffer[0];
     switch (token) {
         case 'c':
@@ -336,7 +336,7 @@ void treatConnection() {
     len = sizeof(struct ucred);
     for (int counter = 0; counter < 10; counter++) {
         clilen = sizeof(cli_addr);
-        newServerSocket = accept(socketServer2, (struct sockaddr*) &cli_addr, (socklen_t*) &clilen);
+        newServerSocket = accept(socketServer, (struct sockaddr*) &cli_addr, (socklen_t*) &clilen);
         if (newServerSocket < 0) {
             perror("Servidor nao aceitou\n");
             exit(EXIT_FAILURE);
@@ -351,13 +351,13 @@ void treatConnection() {
         Args->acceptedSocket = newServerSocket;
         Args->files = files;
         Args->userID = ucred.uid;
-        if (!pthread_create(&tid[counter], NULL, (void*) treatClient, &Args)) {
+        if (pthread_create(&tid[counter], NULL, (void*) treatClient, &Args)) {
             perror("Erro a criar a thread\n");
             exit(EXIT_FAILURE);
         }
         close(newServerSocket);
     }
-    close(socketServer2);
+    close(socketServer);
 }
 
 int main(int argc, char* argv[]) {
