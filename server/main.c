@@ -4,33 +4,45 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include "fs.h"
 
-#define MAX_COMMANDS 10
-#define MAX_INPUT_SIZE 100
+#define _GNU_SOURCE
 #define MAX_FILES 5
+#define MAX_CONNECTIONS_WAITING 10
+#define MAX_THREADS 10
+#define MAX_BUFFER_SZ 100
 
 tecnicofs* fs;
 char* socketName = NULL;
 char* fileOutput = NULL;
-char inputCommands[MAX_COMMANDS][MAX_INPUT_SIZE];
-int numberCommands = 0;
-int numberThreads = 0;
 int numberBuckets = 1;
-int headQueue = 0;
-int sockerServer = 1;
+int listenningSocket = 1;
+int socketServer2 = 0;
 sem_t sem_prod;
 sem_t sem_cons;
 pthread_rwlock_t locker;
 
-typedef struct fichNode {
+typedef struct fileNode {
     int fd;
     int iNumber;
-} fichNode;
+} fileNode;
+
+typedef struct arg_struct {
+    int acceptedSocket;
+    int userID;
+    fileNode* files;
+} args;
+
+struct ucred {
+    pid_t pid;
+    uid_t uid;
+    gid_t gid;
+};
 
 #define INIT { \
     if (pthread_rwlock_init(&locker, NULL)) \
@@ -55,106 +67,87 @@ static void parseArgs(long argc, char* const argv[]) {
     fileOutput = argv[2];
 }
 
-void commandRename(char* name, char* rname) {
+void renameFile(char* name, char* rname) {
     int searchResult1;
     int searchResult2;
-    if (hash(name, numberBuckets) == hash(rname, numberBuckets)) {
-        LOCK;
-        searchResult1 = lookup(fs, name, numberBuckets);
-        searchResult2 = lookup(fs, rname, numberBuckets);
-        if (!searchResult1) {
-            printf("%s file not found\n", name);
-            return;
-        }
-        if (searchResult2) {
-            printf("%s file already exists\n", rname);
-            return;
-        }
-        delete(fs, name, numberBuckets);
-        createFS(fs, rname, searchResult1, numberBuckets);
-        UNLOCK;
+    LOCK;
+    searchResult1 = lookup(fs, name, numberBuckets);
+    searchResult2 = lookup(fs, rname, numberBuckets);
+    if (!searchResult1) {
+        printf("%s file not found\n", name);
+        return;
     }
-    else if (hash(name, numberBuckets) < hash(rname, numberBuckets)) {
-        LOCK;
-        searchResult1 = lookup(fs, name, numberBuckets);
-        if (!searchResult1) {
-            printf("%s file not found\n", name);
-            UNLOCK;
-            return;
-        }
-        searchResult2 = lookup(fs, rname, numberBuckets);
-        if (searchResult2) {
-            printf("%s file already exists\n", rname);
-            UNLOCK;
-            return;
-        }
-        delete(fs, name, numberBuckets);
-        createFS(fs, rname, searchResult1, numberBuckets);
-        UNLOCK;
+    if (searchResult2) {
+       printf("%s file already exists\n", rname);
+       return;
     }
-    else {
-        LOCK;
-        searchResult1 = lookup(fs, name, numberBuckets);
-        if (!searchResult1) {
-            printf("%s file not found\n", name);
-            UNLOCK;
-            return;
-        }
-        searchResult2 = lookup(fs, rname, numberBuckets);
-        if (searchResult2) {
-            printf("%s file already exists\n", rname);
-            UNLOCK;
-            return;
-        }
-        delete(fs, name, numberBuckets);
-        createFS(fs, rname, searchResult1, numberBuckets);
-        UNLOCK;
-    }
+    delete(fs, name, numberBuckets);
+    create(fs, rname, searchResult1, numberBuckets);
+    UNLOCK;
 }
 
-int createSocket(char* address) {
-    int sockfd, servlen;
+void createSocket(char* address) {
+    int socketServer, servlen;
     struct sockaddr_un serv_addr;
-    if ((sockfd = socket(AF_UNIX,SOCK_STREAM,0) ) < 0)
-        err_dump("Server: can't open stream socket");
+    if ((socketServer = socket(AF_UNIX,SOCK_STREAM,0) ) < 0) {
+        perror("Servidor nao consegue stream sockey eheh\n");
+        exit(EXIT_FAILURE);
+    }
     unlink(address); 
     bzero((char*) &serv_addr, sizeof(serv_addr)); 
-    sockerServer = sockfd; 
     serv_addr.sun_family = AF_UNIX; 
     strcpy(serv_addr.sun_path, address); 
     servlen = strlen(serv_addr.sun_path) + sizeof(serv_addr.sun_family); 
-    if (bind(sockfd, (struct sockaddr*) &serv_addr, servlen) < 0)
-        err_dump("Server, can't bind local address");
-    listen(sockfd, MAX_FILES);
+    if (bind(socketServer, (struct sockaddr*) &serv_addr, servlen) < 0) {
+        perror("Servidor nao consegue bindar eheh\n");
+        exit(EXIT_FAILURE);
+    }
+    socketServer2 = socketServer;
+    listen(socketServer, MAX_CONNECTIONS_WAITING);
 }
 
-int open(char* filename, int mode) {
-    int fd = 0;
-    int  flag = 0;
+int openFile(char* filename, int mode, fileNode files[], int clientID) {
+    int fd, flag, i = 0;
     int iNumber = lookup(fs, filename, numberBuckets);
+    fileNode file;
     inode_t* openNode;
-    if (!mode)
+    if (mode == 0) {
+        perror("cant touch this\n");
         exit(EXIT_FAILURE);
+    }
+    while (i < MAX_FILES) {
+        if (files[i].fd == -1)
+            break;
+        i++;
+    }
+    if (i == MAX_FILES) {
+        perror("Numero max de ficheiros abertos esgotados\n");
+        exit(EXIT_FAILURE);
+    }
     openNode = (inode_t*) malloc(sizeof(struct inode_t));
     if (inode_get(iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1) {
         perror("Nao leu\n");
         exit(EXIT_FAILURE);
     }
-    if (openNode->owner == getuid() && openNode->ownerPermissions == mode)
+    if (openNode->owner == clientID && openNode->ownerPermissions == mode)
         flag = openNode->ownerPermissions;
-    else if (openNode->owner != getuid() && openNode->othersPermissions == mode)
+    else if (openNode->owner != clientID && openNode->othersPermissions == mode)
         flag = openNode->othersPermissions;
-    else
+    else {
         perror("Cliente com acesso negado\n");
         exit(EXIT_FAILURE);
+    }
     fd = open(filename, flag);
+    file.fd = fd;
+    file.iNumber = iNumber;
+    files[i] = file;
     return fd;
 }
 
-int close(int fd) {
+int closeFile(int fd, fileNode files[]) {
     for (int i = 0; i < 5; i++) {
-        if (fich[i].fd == fd) {
-            fich[i] = NULL;
+        if (files[i].fd == fd) {
+            files[i].fd = -1;
             close(fd);
             return 0;
         }
@@ -163,40 +156,40 @@ int close(int fd) {
     exit(EXIT_FAILURE);
 }
 
-int read(int fd, char* buffer, int len) {
-    int iNumber;
+int readFile(int fd, char* buffer, int len, fileNode files[], int clientID) {
     inode_t* openNode = NULL;
     for (int i = 0; i < 5; i++) {
-        if (fich[i].fd == fd) {
+        if (files[i].fd == fd) {
             openNode = (inode_t*) malloc(sizeof(struct inode_t));
-            if (inode_get(fich[i]->iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1) {
+            if (inode_get(files[i].iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1) {
                 perror("Nao leu\n");
                 exit(EXIT_FAILURE);
             }
             if (strlen(openNode->fileContent) > len - 1) {
-                perror("Demasiado big eheh\n");
+                perror("Grande demais\n");
                 exit(EXIT_FAILURE);
             }
-            if ((openNode->owner == getuid() && (openNode->ownerPermissions == 1 || openNode->ownerPermissions == 3)) || (openNode->owner != getuid() && (openNode->othersPermissions == 1 || openNode->othersPermissions == 3))) {
+            if ((openNode->owner == clientID && (openNode->ownerPermissions == 1 || openNode->ownerPermissions == 3)) || (openNode->owner != clientID && (openNode->othersPermissions == 1 || openNode->othersPermissions == 3))) {
                 strcpy(buffer, openNode->fileContent);
                 return (strlen(buffer) - 1);
             }
             else {
-                perror("Nao pode ser lido eheh\n");
+                perror("Nao pode ser lido\n");
                 exit(EXIT_FAILURE);
             }
         }
-        perror("Nao esta aberto eheh\n");
+        perror("Nao esta aberto\n");
         exit(EXIT_FAILURE);
     }
+    return -1;
 }
 
-int write(int fd, char* buffer, int len) {
+int writeFile(int fd, char* buffer, int len, fileNode files[], int clientID) {
     inode_t* openNode = NULL;
     for (int i = 0; i < 5; i++) {
-        if (fich[i].fd == fd) {
-            if ((openNode->owner == getuid() && (openNode->ownerPermissions == 2 || openNode->ownerPermissions == 3)) || (openNode->owner != getuid() && (openNode->othersPermissions == 2 || openNode->othersPermissions == 3))) {
-                if (inode_set(fich[i].iNumber, buffer, len) == -1) {
+        if (files[i].fd == fd) {
+            if ((openNode->owner == clientID && (openNode->ownerPermissions == 2 || openNode->ownerPermissions == 3)) || (openNode->owner != clientID && (openNode->othersPermissions == 2 || openNode->othersPermissions == 3))) {
+                if (inode_set(files[i].iNumber, buffer, len) == -1) {
                     perror("Nao settou\n");
                     exit(EXIT_FAILURE);
                 }
@@ -212,128 +205,159 @@ int write(int fd, char* buffer, int len) {
     exit(EXIT_FAILURE);
 }
 
-int create(char* filename, int ownerPremissions, int othersPermissions) {
+int createFile(char* filename, int ownerPermissions, int othersPermissions, int clientID) {
     if (lookup(fs, filename, numberBuckets)) {
         perror("ficheiro ja existe eheh\n");
         exit(EXIT_FAILURE);
     }
-    if (inode_create(geteuid(), (permission) ownerPremissions, (permission) othersPermissions) == -1) {
+    int iNumber = inode_create(clientID, (permission) ownerPermissions, (permission) othersPermissions);
+    if (iNumber == -1) {
         perror("erro ao criar o inode\n");
         exit(EXIT_FAILURE);
     }
     LOCK;
-    int iNumber = obtainNewInumber(fs);
-    createFS(fs, filename, iNumber, numberBuckets);
-    UNLOCK; 
+    create(fs, filename, iNumber, numberBuckets);
+    UNLOCK;
     return 0; 
 }
 
-void trata_cliente_stream(int sockfd, int[] fich) {
-    int n, numTokens, fd, len, mode, inumber, ownerPermissions, othersPermissions;
-    char token;
-    char* filename, newFilename, buffer, sendBuffer;
-    pthread_t tid;
-    n = read(sockfd, buffer, MAXLINHA + 1);
+int deleteFile(char* filename, fileNode files[], int clientID) {
+    LOCK;
+    int iNumber = lookup(fs, filename, numberBuckets);
+    UNLOCK;
+    inode_t* openNode;
+    if (!iNumber) {
+        perror("ficheiro nao existe\n");
+        exit(EXIT_FAILURE);
+    }
+    openNode = (inode_t*) malloc(sizeof(struct inode_t));
+    if (inode_get(iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1) {
+        perror("Nao leu\n");
+        exit(EXIT_FAILURE);
+    }
+    if (openNode->owner != clientID) {
+        perror("Quem quer apagar nao e o dono\n");
+        exit(EXIT_FAILURE);
+    }
+    LOCK;
+    delete(fs, filename, numberBuckets);
+    UNLOCK;
+    if (inode_delete(iNumber) == -1) {
+        perror("Servidor erro no delete\n");
+        exit(EXIT_FAILURE);
+    }
+    return 0;
+}
+
+void* treatClient(args* Args) {
+    int n, numTokens, fd, len, mode, ownerPermissions, othersPermissions;
+    int acceptedSocket = Args->acceptedSocket;
+    fileNode* files = (fileNode*) malloc(sizeof(struct fileNode) * MAX_FILES);
+    files = Args->files;
+    int clientID = Args->userID;
+    char token, *filename = NULL, *newFilename = NULL, *buffer = NULL, *sendBuffer = NULL;
+    n = read(acceptedSocket, buffer, MAX_BUFFER_SZ + 1);
     if (n < 0)
         perror("Erro servidor no read");
     token = buffer[0];
     switch (token) {
         case 'c':
-            numTokens = sscanf(&buffer, "%c %s %d%d", token, filename, ownerPermissions, othersPermissions);
-            if (numTokens != 4){
+            numTokens = sscanf(buffer, "%c %s %d%d", &token, filename, &ownerPermissions, &othersPermissions);
+            if (numTokens != 4) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
             }
-            create(filename, ownerPermissions, othersPermissions);
-            break;    
+            createFile(filename, ownerPermissions, othersPermissions, clientID);
+            break; 
         case 'd':
-            numTokens = sscanf(&buffer, "%c %s", token, filename);
+            numTokens = sscanf(buffer, "%c %s", &token, filename);
             if (numTokens != 2) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
             }
-            LOCK;
-            inumber = lookup(fs, filename, numberBuckets);
-            delete(fs, filename, numberBuckets);
-            UNLOCK;
-            inode_delete(inumber);
+            deleteFile(filename, files, clientID);
             break;
         case 'r':
-            numTokens = sscanf(&buffer, "%c %s %s", token, filename, newFilename);
+            numTokens = sscanf(buffer, "%c %s %s", &token, filename, newFilename);
             if (numTokens != 3) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
             }
             LOCK;
-            commandRename(filename, newFilename);
+            renameFile(filename, newFilename);
             UNLOCK;
             break;
         case 'o':
-            numTokens = sscanf(&buffer, "%c %s %d", token, filename, mode);
+            numTokens = sscanf(buffer, "%c %s %d", &token, filename, &mode);
             if (numTokens != 3) {
                 perror("erro no comando");
                 exit(EXIT_FAILURE);
             }
-            for (int i = 0; i < 5; i++) {
-                if (fich[i] == NULL)
-                    break;
-                perror("Numero max de ficheiros abertos esgotados\n");
-                exit(EXIT_FAILURE);
-            }
-            fd = open(filename, mode);
-            fichNode fN = NULL;
-            fN.fd = fd;
-            fN.iNumber = lookup(fs, filename, numberBuckets);
-            fich[i] = fN;
+            openFile(filename, mode, files, clientID);
             break;
         case 'x':
-            numTokens = sscanf(&buffer, "%c %d", command, fd);
+            numTokens = sscanf(buffer, "%c %d", &token, &fd);
             if (numTokens != 2) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
             }
-            close(fd);
+            closeFile(fd, files);
             break;
         case 'l':
-            numTokens = sscanf(&buffer, "%c %d %d", command, fd, len);
+            numTokens = sscanf(buffer, "%c %d %d", &token, &fd, &len);
             if (numTokens != 3) {
                 perror("erro no comando\n");
                 exit(EXIT_FAILURE);
             }
-            read(fd, buffer, len);
+            readFile(fd, buffer, len, files, clientID);
             break;
         case 'w':
-            numTokens = sscanf(&buffer, "%c %d %s", command, fd, sendBuffer);
+            numTokens = sscanf(buffer, "%c %d %s", &token, &fd, sendBuffer);
             if (numTokens != 3) {
-                perror("erro no comando\n");
+                perror("Erro no comando\n");
                 exit(EXIT_FAILURE);
             }
-            write(fd, buffer, len);
+            writeFile(fd, buffer, len, files, clientID);
             break;
         default:
             perror("Erro default\n");
+            exit(EXIT_FAILURE);
+            break;
     }
+    return NULL;
 }
 
-int treatSocket() {
-    int newsockfd, clilen, childpid, servlen;
+void treatConnection() {
+    int newServerSocket, clilen;
+    unsigned int len;
     struct sockaddr_un cli_addr;
-    pthread_t tid;
-    for (;;) {
+    struct ucred ucred;
+    pthread_t tid[MAX_THREADS];
+    len = sizeof(struct ucred);
+    for (int counter = 0; counter < 10; counter++) {
         clilen = sizeof(cli_addr);
-        newsockfd = accept(sockerServer, (struct sockaddr*) &cli_addr, &clilen);
-        if (newsockfd < 0)
-            err_dump("Server: accept error");
-        if ((childpid = fork()) < 0)
-            err_dump("Server: fork error");
-        else if (childpid == 0) {
-            close(sockerServer);
-            fichNode fich[5];
-            pthread_create(&tid, NULL, trata_cliente_stream, newsockfd, fich);
-            exit(0);
+        newServerSocket = accept(socketServer2, (struct sockaddr*) &cli_addr, (socklen_t*) &clilen);
+        if (newServerSocket < 0) {
+            perror("Servidor nao aceitou\n");
+            exit(EXIT_FAILURE);
         }
-    close(newsockfd); 
+        if (getsockopt(newServerSocket, SOL_SOCKET, SO_PEERCRED, &ucred, &len) == -1) {
+            perror("Erro no getsockopt\n");
+            exit(EXIT_FAILURE);
+        }
+        fileNode files[5];
+        args* Args = (args*) malloc(sizeof(struct arg_struct));
+        Args->files = (fileNode*) malloc(sizeof(struct fileNode) * MAX_FILES);
+        Args->acceptedSocket = newServerSocket;
+        Args->files = files;
+        Args->userID = ucred.uid;
+        if (!pthread_create(&tid[counter], NULL, (void*) treatClient, &Args)) {
+            perror("Erro a criar a thread\n");
+            exit(EXIT_FAILURE);
+        }
+        close(newServerSocket);
     }
+    close(socketServer2);
 }
 
 int main(int argc, char* argv[]) {
@@ -344,6 +368,11 @@ int main(int argc, char* argv[]) {
     inode_table_init();
     fs = new_tecnicofs(numberBuckets);
     gettimeofday(&end, NULL);
+    createSocket(socketName);
+    while (1) {
+        printf("entrou\n");
+        treatConnection();
+    }
     FILE* fptr = fopen(fileOutput, "w");
     print_tecnicofs_tree(fptr, fs, numberBuckets);
     fclose(fptr);

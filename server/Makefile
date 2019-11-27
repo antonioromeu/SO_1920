@@ -11,10 +11,10 @@ LDFLAGS=-lm -pthread
 # https://www.gnu.org/software/make/manual/html_node/Phony-Targets.html
 .PHONY: all clean run
 
-all: tecnicofs-rwlock
+all: tecnicofs
 
-tecnicofs-rwlock: lib/bst.o lib/hash.o lib/inodes.o fs.o main-rwlock.o
-	$(LD) $(CFLAGS) $(LDFLAGS) -DRWLOCK -o tecnicofs-rwlock lib/bst.o lib/hash.o lib/inodes.o fs.o main-rwlock.o
+tecnicofs: lib/bst.o lib/hash.o lib/inodes.o fs.o main-rwlock.o
+	$(LD) $(CFLAGS) $(LDFLAGS) -DRWLOCK -o tecnicofs lib/bst.o lib/hash.o lib/inodes.o fs.o main.o
 
 lib/bst.o: lib/bst.c lib/bst.h
 	$(CC) $(CFLAGS) -o lib/bst.o -c lib/bst.c
@@ -29,11 +29,11 @@ fs.o: fs.c fs.h lib/bst.h lib/hash.h
 	$(CC) $(CFLAGS) -o fs.o -c fs.c
 
 main-rwlock.o: main.c fs.h lib/bst.h lib/hash.h lib/inodes.h
-	$(CC) $(CFLAGS) -DRWLOCK -o main-rwlock.o -c main.c
+	$(CC) $(CFLAGS) -DRWLOCK -o main.o -c main.c
 
 clean:
 	@echo Cleaning...
-	rm -f lib/*.o *.o tecnicofs-rwlock
+	rm -f lib/*.o *.o tecnicofs
 
 run: tecnicofs
 	./tecnicofs

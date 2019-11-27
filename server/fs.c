@@ -30,7 +30,7 @@ void free_tecnicofs(tecnicofs* fs, int numberBuckets) {
 	free(fs);
 }
 
-void createFS(tecnicofs* fs, char* name, int inumber, int numberBuckets) {
+void create(tecnicofs* fs, char* name, int inumber, int numberBuckets) {
     int i = hash(name, numberBuckets);
 	fs->vector[i] = insert(fs->vector[i], name, inumber);
 }
