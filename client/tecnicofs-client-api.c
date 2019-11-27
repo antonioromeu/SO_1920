@@ -5,7 +5,6 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/types.h>
-#include <math.h>
 #include "tecnicofs-client-api.h"
 #include "tecnicofs-api-constants.h"
 
@@ -71,17 +70,17 @@ int tfsOpen(char *filename, permission mode) {
 }
 
 int tfsClose(int fd) { 
-    int nDigits = floor(log10(abs(fd))) + 1;    
-    int n = nDigits + 3;
+    int n = 3;
     char* buffer = (char*) malloc(sizeof(char) * n);
     snprintf(buffer, n, "x %d", fd);
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
         perror("Error cliente no write/close\n");
     free(buffer);
+    return 0;
+}
 
 int tfsRead(int fd, char* receiveBuffer, int len) {
-    int nDigits = floor(log10(abs(fd))) + 1;    
-    int n = nDigits + len + 4;
+    int n = 5;
     char* buffer = (char*) malloc(sizeof(char) * n);
     snprintf(buffer, n, "l %d %d", fd, len);
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
@@ -91,8 +90,7 @@ int tfsRead(int fd, char* receiveBuffer, int len) {
 }
 
 int tfsWrite(int fd, char* sendBuffer, int len) { 
-    int nDigits = floor(log10(abs(fd))) + 1;    
-    int n = nDigits + len + 4;
+    int n = len + 4;
     char* buffer = (char*) malloc(sizeof(char) * n);
     snprintf(buffer, n, "w %d %s", fd, sendBuffer);
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer))
@@ -101,11 +99,9 @@ int tfsWrite(int fd, char* sendBuffer, int len) {
     return 0;
 }
 
-int tfsUnmout() {
-    if (clientSocket < 0) {
+int tfsUnmount() {
+    if (clientSocket < 0)
         perror("Socket nao foi criado\n");
-        exit(EXIT_FAILURE);
-    }
     if (close(clientSocket))
         perror("Error no unmout\n");
     return 0;
