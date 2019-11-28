@@ -8,6 +8,8 @@
 #include "tecnicofs-client-api.h"
 #include "tecnicofs-api-constants.h"
 
+#define MAX_BUFFER 100
+
 int clientSocket = -1;
 
 int tfsMount(char* address) {
@@ -25,24 +27,27 @@ int tfsMount(char* address) {
         perror("Error ao fazer connect no client\n");
         exit(EXIT_FAILURE);
     }
-    printf("ola\n");
-
     return 0;
 }
 
 int tfsCreate(char* filename, permission ownerPermissions, permission othersPermissions) {
-    int n = strlen(filename) + 6;
-    char* buffer = (char*) malloc(sizeof(char) * n);
+    char* buffer = (char*) malloc(sizeof(char) * MAX_BUFFER);
     sprintf(buffer, "c %s %d%d", filename, ownerPermissions, othersPermissions);
-    if (write(clientSocket, buffer, (size_t) strlen(buffer)) != strlen(buffer))
+    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer))
         perror("Error cliente no write/create\n");
-    free(buffer);
-    return 0;
+    read(clientSocket, buffer, strlen(buffer));
+    if (!strcmp(buffer, "SUCESS")) {
+        free(buffer);
+        return 0;
+    }
+    else {
+        free(buffer);
+        return -4;
+    }
 }
 
 int tfsDelete(char *filename) {
-    int n = strlen(filename) + 3;
-    char* buffer = (char*) malloc(sizeof(char) * n);
+    char* buffer = (char*) malloc(sizeof(char) * MAX_BUFFER);
     sprintf(buffer,"d %s", filename);
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer))
         perror("Error cliente no write/delete\n");
@@ -51,8 +56,7 @@ int tfsDelete(char *filename) {
 }
 
 int tfsRename(char *filename, char *newFilename) {
-    int n = strlen(filename) + strlen(newFilename) + 4;
-    char* buffer = (char*) malloc(sizeof(char) * n);
+    char* buffer = (char*) malloc(sizeof(char) * MAX_BUFFER);
     sprintf(buffer, "r %s %s", filename, newFilename);
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
         perror("Error cliente no write/rename\n");
@@ -61,8 +65,7 @@ int tfsRename(char *filename, char *newFilename) {
 }
 
 int tfsOpen(char *filename, permission mode) {
-    int n = strlen(filename) + 5;
-    char* buffer = (char*) malloc(sizeof(char) * n);
+    char* buffer = (char*) malloc(sizeof(char) * MAX_BUFFER);
     sprintf(buffer, "o %s %d", filename, mode);
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
         perror("Error cliente no write/open\n");
@@ -71,8 +74,7 @@ int tfsOpen(char *filename, permission mode) {
 }
 
 int tfsClose(int fd) { 
-    int n = 3;
-    char* buffer = (char*) malloc(sizeof(char) * n);
+    char* buffer = (char*) malloc(sizeof(char) * MAX_BUFFER);
     sprintf(buffer, "x %d", fd);
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
         perror("Error cliente no write/close\n");
@@ -81,8 +83,7 @@ int tfsClose(int fd) {
 }
 
 int tfsRead(int fd, char* receiveBuffer, int len) {
-    int n = 5;
-    char* buffer = (char*) malloc(sizeof(char) * n);
+    char* buffer = (char*) malloc(sizeof(char) * MAX_BUFFER);
     sprintf(buffer, "l %d %d", fd, len);
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
         perror("Error cliente no write/read\n");
@@ -91,8 +92,7 @@ int tfsRead(int fd, char* receiveBuffer, int len) {
 }
 
 int tfsWrite(int fd, char* sendBuffer, int len) { 
-    int n = len + 4;
-    char* buffer = (char*) malloc(sizeof(char) * n);
+    char* buffer = (char*) malloc(sizeof(char) * MAX_BUFFER);
     sprintf(buffer, "w %d %s", fd, sendBuffer);
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer))
         perror("Error cliente no write/write");

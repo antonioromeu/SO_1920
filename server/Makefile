@@ -3,7 +3,7 @@
 
 CC   = gcc
 LD   = gcc
-CFLAGS = -Wall -std=gnu99 -I../
+CFLAGS =-g -Wall -std=gnu99 -I../
 
 LDFLAGS=-lm -pthread
 

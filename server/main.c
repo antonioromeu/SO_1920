@@ -10,6 +10,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include "fs.h"
+#include "../client/tecnicofs-api-constants.h"
 
 #define _GNU_SOURCE
 #define MAX_FILES 5
@@ -200,13 +201,16 @@ int writeFile(int fd, char* buffer, int len, fileNode files[], int clientID) {
             }
         }
     }
-    perror("Nao esta aberto eheh\n");
+    perror("Nao esta aberto eheh");
     exit(EXIT_FAILURE);
 }
 
-int createFile(char* filename, int ownerPermissions, int othersPermissions, int clientID) {
-    if (lookup(fs, filename, numberBuckets)) {
-        perror("ficheiro ja existe eheh\n");
+int createFile(char* filename, int ownerPermissions, int othersPermissions, int clientID, int acceptedSocket) {
+    if (lookup(fs, filename, numberBuckets) != -1) {
+        char* str_Err = (char *) malloc(sizeof(char) * MAX_BUFFER_SZ);
+        strcpy(str_Err, "TECNICOFS_ERROR_FILE_ALREADY_EXISTS");
+        printf("%s\n", str_Err);
+        write(acceptedSocket, str_Err, strlen(str_Err));
         exit(EXIT_FAILURE);
     }
     int iNumber = inode_create(clientID, (permission) ownerPermissions, (permission) othersPermissions);
@@ -217,6 +221,9 @@ int createFile(char* filename, int ownerPermissions, int othersPermissions, int 
     LOCK;
     create(fs, filename, iNumber, numberBuckets);
     UNLOCK;
+    char* str_Suc = (char *) malloc(sizeof(char) * MAX_BUFFER_SZ);
+    strcpy(str_Suc, "SUCESS");
+    write(acceptedSocket, str_Suc, strlen(str_Suc));
     return 0; 
 }
 
@@ -248,31 +255,37 @@ int deleteFile(char* filename, fileNode files[], int clientID) {
     return 0;
 }
 
-void* treatClient(args* Args) {
+void* treatClient(void* a) {
     int numTokens, fd, len, mode, ownerPermissions, othersPermissions;
+    args *Args = (args *)a;
     int acceptedSocket = Args->acceptedSocket;
     fileNode* files = (fileNode*) malloc(sizeof(struct fileNode) * MAX_FILES);
     files = Args->files;
     int clientID = Args->userID;
-    char token, *filename = NULL, *newFilename = NULL, *sendBuffer = NULL;
+    char token;
     char* buffer = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
-    read(acceptedSocket, buffer, MAX_BUFFER_SZ + 1);
-    printf("ehe\n");
-    printf("%s\n", buffer);
+    char* filename = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
+    char* newFilename = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
+    char* sendBuffer = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
+    while (1) {
+        read(acceptedSocket, buffer, MAX_BUFFER_SZ + 1);
+        printf("enttroy\n");
     token = buffer[0];
     switch (token) {
         case 'c':
-            numTokens = sscanf(buffer, "%c %s %d%d", &token, filename, &ownerPermissions, &othersPermissions);
+            printf("criar outro\n");
+            numTokens = sscanf(buffer, "%c %s %1d%1d", &token, filename, &ownerPermissions, &othersPermissions);
             if (numTokens != 4) {
-                perror("erro no comando\n");
+                perror("Erro no comando c\n");
                 exit(EXIT_FAILURE);
             }
-            createFile(filename, ownerPermissions, othersPermissions, clientID);
-            break; 
+            createFile(filename, ownerPermissions, othersPermissions, clientID, acceptedSocket);
+            printf("acabou o create\n");
+            continue; 
         case 'd':
             numTokens = sscanf(buffer, "%c %s", &token, filename);
             if (numTokens != 2) {
-                perror("erro no comando\n");
+                perror("Erro no comando d\n");
                 exit(EXIT_FAILURE);
             }
             deleteFile(filename, files, clientID);
@@ -280,7 +293,7 @@ void* treatClient(args* Args) {
         case 'r':
             numTokens = sscanf(buffer, "%c %s %s", &token, filename, newFilename);
             if (numTokens != 3) {
-                perror("erro no comando\n");
+                perror("Erro no comando r\n");
                 exit(EXIT_FAILURE);
             }
             LOCK;
@@ -325,18 +338,17 @@ void* treatClient(args* Args) {
             break;
     }
     return NULL;
+    }
 }
 
 void treatConnection() {
-    int newServerSocket, clilen;
+    int newServerSocket;
     unsigned int len;
-    struct sockaddr_un cli_addr;
     struct ucred ucred;
     pthread_t tid[MAX_THREADS];
     len = sizeof(struct ucred);
     for (int counter = 0; counter < 10; counter++) {
-        clilen = sizeof(cli_addr);
-        newServerSocket = accept(socketServer, (struct sockaddr*) &cli_addr, (socklen_t*) &clilen);
+        newServerSocket = accept(socketServer, NULL, NULL);
         if (newServerSocket < 0) {
             perror("Servidor nao aceitou\n");
             exit(EXIT_FAILURE);
@@ -351,11 +363,10 @@ void treatConnection() {
         Args->acceptedSocket = newServerSocket;
         Args->files = files;
         Args->userID = ucred.uid;
-        if (pthread_create(&tid[counter], NULL, (void*) treatClient, &Args)) {
+        if (pthread_create(&tid[counter], NULL, treatClient, Args)) {
             perror("Erro a criar a thread\n");
             exit(EXIT_FAILURE);
         }
-        close(newServerSocket);
     }
     close(socketServer);
 }
