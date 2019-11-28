@@ -14,7 +14,6 @@ int main(int argc, char** argv) {
     assert(tfsMount(argv[1]) == 0);
     assert(tfsCreate("a", RW, READ) == 0);
     assert((fd = tfsOpen("a", RW)) == 0);
-
     printf("Test: delete open file");
     assert(tfsDelete("a") == TECNICOFS_ERROR_FILE_IS_OPEN);
 
