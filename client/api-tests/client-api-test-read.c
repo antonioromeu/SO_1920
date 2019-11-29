@@ -40,7 +40,8 @@ int main(int argc, char** argv) {
     printf("Test: read file open in write mode");
     assert((fd = tfsOpen("abc", WRITE)) == 0);
     assert(tfsRead(fd, readBuffer, 6) == TECNICOFS_ERROR_INVALID_MODE);
-
+    
+    assert((fd = tfsClose(0)) == 0);
 
     assert(tfsDelete("abc") == 0);
     assert(tfsUnmount() == 0);

@@ -16,18 +16,14 @@ int main(int argc, char** argv) {
     assert(tfsMount(argv[1]) == 0);
 
     assert(tfsCreate("abc", RW, READ) == 0 );
-
     assert(tfsRename("abc", "bcd") == 0);
-
     int fd = -1;
     assert((fd = tfsOpen("bcd", RW)) == 0);
 
     assert(tfsWrite(fd, "hmm", 3) == 0);
 
     assert(tfsRead(fd, readBuffer, 4) == 3);
-
     puts(readBuffer);
-
     assert(tfsClose(fd) == 0);
 
     assert(tfsDelete("bcd") == 0);
