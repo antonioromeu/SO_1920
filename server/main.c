@@ -24,6 +24,7 @@ char* socketName = NULL;
 char* fileOutput = NULL;
 int numberBuckets = 1;
 int socketServer = 0;
+pthread_rwlock_t locker;
 
 typedef struct filenode {
     int fd;
@@ -45,14 +46,8 @@ struct ucred {
 };
 
 #define INIT { \
-    pthread_rwlock_t locker; \
-    pthread_rwlock_t* vecLock; \
-    vecLock = (pthread_rwlock_t*) malloc(sizeof(pthread_rwlock_t) * A); \
     if (pthread_rwlock_init(&locker, NULL)) \
-        exit(EXIT_FAILURE); \
-    for (int i = 0; i < A; i++) \
-        if (pthread_rwlock_init(&vecLock[i], NULL)) \
-            exit(EXIT_FAILURE); \
+        exit(EXIT_FAILURE); }
 #define LOCK pthread_rwlock_wrlock(&locker)
 #define UNLOCK pthread_rwlock_unlock(&locker)
 #define DESTROY { \
@@ -320,21 +315,32 @@ int deleteFile(char* filename, fileNode* files, int clientID, int acceptedSocket
     return -1;
 }
 
+void treatSignal(int signum) {
+    if (signal(SIGINT, treatSignal) == SIG_ERR)
+        perror("Couldn't install signal\n");
+    close(socketServer);
+}
+
 void* treatClient(void* a) {
     int numTokens, fd, len, mode, ownerPermissions, othersPermissions;
+    sigset_t set;
+    int s;
+    sigemptyset(&set);
+    sigaddset(&set, SIGINT);
+    s = pthread_sigmask(SIG_BLOCK, &set, NULL);
+    if (s != 0)
+        perror("Coundn't create sigmask\n");
     args* Args = (args*) a;
     int acceptedSocket = Args->acceptedSocket;
-    //fileNode* files = (fileNode) malloc(sizeof(struct filenode) * MAX_FILES);
     fileNode* files = Args->files;
     int clientID = Args->userID;
     char token;
-    char* buffer = NULL; // = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
+    char* buffer = NULL;
     char* filename = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
     char* newFilename = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
     char* sendBuffer = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
     while (1) {
         free(buffer);
-        //char* buffer = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
         buffer = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
         for (;;) {
             if (read(acceptedSocket, buffer, MAX_BUFFER_SZ + 1) != 0) {
@@ -418,7 +424,7 @@ void treatConnection() {
         newServerSocket = accept(socketServer, NULL, NULL);
         if (newServerSocket < 0) {
             perror("Servidor nao aceitou\n");
-            exit(EXIT_FAILURE);
+            break;
         }
         if (getsockopt(newServerSocket, SOL_SOCKET, SO_PEERCRED, &ucred, &len) == -1) {
             perror("Erro no getsockopt\n");
@@ -433,8 +439,12 @@ void treatConnection() {
             perror("Erro a criar a thread\n");
             exit(EXIT_FAILURE);
         }
+        if (signal(SIGINT, treatSignal) == SIG_ERR) 
+            perror("Couldn't install signal handler\n");
     }
-    close(socketServer);
+    for (int i = 0; i < MAX_THREADS; i++)
+        if (pthread_join(tid[i], NULL))
+            perror("Can't join threads\n");
 }
 
 int main(int argc, char* argv[]) {
