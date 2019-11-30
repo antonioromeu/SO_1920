@@ -24,7 +24,9 @@ char* socketName = NULL;
 char* fileOutput = NULL;
 int numberBuckets = 1;
 int socketServer = 0;
+int counter = 0;
 pthread_rwlock_t locker;
+pthread_t tid[MAX_THREADS];
 
 typedef struct filenode {
     int fd;
@@ -45,6 +47,7 @@ struct ucred {
     gid_t gid;
 };
 
+args** Args;
 #define INIT { \
     if (pthread_rwlock_init(&locker, NULL)) \
         exit(EXIT_FAILURE); }
@@ -315,10 +318,29 @@ int deleteFile(char* filename, fileNode* files, int clientID, int acceptedSocket
     return -1;
 }
 
+void endProgram() {
+    printf("counter: %d\n", counter);
+    int t;
+    if (close(socketServer))
+        perror("Erro no close\n");
+    for (int i = 0; i < counter; i++) {
+        if (pthread_join(tid[counter], (void**) &t)  != 0)
+            perror("Can't join threads\n");
+        printf("%d\n", t);
+        close(Args[i]->acceptedSocket);
+        free(Args[i]->files);
+        free(Args[i]);
+    }
+    free(Args);
+    return;
+
+}
+
 void treatSignal(int signum) {
+    printf("inicio do treatSignal\n");
     if (signal(SIGINT, treatSignal) == SIG_ERR)
         perror("Couldn't install signal\n");
-    close(socketServer);
+    endProgram();
 }
 
 void* treatClient(void* a) {
@@ -343,8 +365,14 @@ void* treatClient(void* a) {
         free(buffer);
         buffer = (char*) malloc(sizeof(char) * (MAX_BUFFER_SZ + 1));
         for (;;) {
-            if (read(acceptedSocket, buffer, MAX_BUFFER_SZ + 1) != 0) {
+            if (read(acceptedSocket, buffer, MAX_BUFFER_SZ + 1) != 0)
                 break;
+            else {
+               // shutdown(acceptedSocket, 2);
+               // if (close(acceptedSocket) != 0)
+             //      perror("fechou mal no pequeno\n");
+                //return NULL;
+                return NULL;
             }
         }
         token = buffer[0];
@@ -416,35 +444,41 @@ void* treatClient(void* a) {
 
 void treatConnection() {
     int newServerSocket;
-    unsigned int len;
+    struct sockaddr_un end_cli;
+    unsigned int len, dim_cli;
     struct ucred ucred;
-    pthread_t tid[MAX_THREADS];
+    Args = (args**) malloc(sizeof(struct arg_struct) * MAX_THREADS);
+    dim_cli = sizeof(end_cli);
     len = sizeof(struct ucred);
-    for (int counter = 0; counter < MAX_THREADS; counter++) {
-        newServerSocket = accept(socketServer, NULL, NULL);
+    while (counter < MAX_THREADS) {
+        printf("comecou o while: %d\n", socketServer);
+        newServerSocket = accept(socketServer, (struct sockaddr*) &end_cli, &dim_cli);
         if (newServerSocket < 0) {
             perror("Servidor nao aceitou\n");
-            break;
+            //close(socketServer);
+            //close(newServerSocket);
+            return;
         }
         if (getsockopt(newServerSocket, SOL_SOCKET, SO_PEERCRED, &ucred, &len) == -1) {
             perror("Erro no getsockopt\n");
             exit(EXIT_FAILURE);
         }
         fileNode* files = (fileNode*) malloc(sizeof(struct filenode) * MAX_FILES);
-        args* Args = (args*) malloc(sizeof(struct arg_struct));
-        Args->acceptedSocket = newServerSocket;
-        Args->files = files;
-        Args->userID = ucred.uid;
-        if (pthread_create(&tid[counter], NULL, treatClient, Args)) {
+        Args[counter] = (args*) malloc(sizeof(struct arg_struct));
+        Args[counter]->acceptedSocket = newServerSocket;
+        Args[counter]->files = files;
+        Args[counter]->userID = ucred.uid;
+        if (pthread_create(&tid[counter], NULL, treatClient, Args[counter])) {
             perror("Erro a criar a thread\n");
             exit(EXIT_FAILURE);
         }
-        if (signal(SIGINT, treatSignal) == SIG_ERR) 
+        counter++;
+        if (signal(SIGINT, treatSignal) == SIG_ERR) {
             perror("Couldn't install signal handler\n");
+            exit(-1);
+        }
     }
-    for (int i = 0; i < MAX_THREADS; i++)
-        if (pthread_join(tid[i], NULL))
-            perror("Can't join threads\n");
+    return;
 }
 
 int main(int argc, char* argv[]) {
@@ -456,9 +490,8 @@ int main(int argc, char* argv[]) {
     fs = new_tecnicofs(numberBuckets);
     gettimeofday(&end, NULL);
     createSocket(socketName);
-    while (1) {
-        treatConnection();
-    }
+    treatConnection();
+    printf("no main\n");
     FILE* fptr = fopen(fileOutput, "w");
     print_tecnicofs_tree(fptr, fs, numberBuckets);
     fclose(fptr);
