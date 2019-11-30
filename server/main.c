@@ -320,18 +320,16 @@ int deleteFile(char* filename, fileNode* files, int clientID, int acceptedSocket
 
 void endProgram() {
     printf("counter: %d\n", counter);
-    int t;
-    if (close(socketServer))
-        perror("Erro no close\n");
     for (int i = 0; i < counter; i++) {
-        if (pthread_join(tid[counter], (void**) &t)  != 0)
+        if (pthread_join(tid[i], NULL)  != 0)
             perror("Can't join threads\n");
-        printf("%d\n", t);
         close(Args[i]->acceptedSocket);
         free(Args[i]->files);
         free(Args[i]);
     }
     free(Args);
+    close(socketServer);
+    printf("ja esta a ficar bom\n"); 
     return;
 
 }
@@ -367,13 +365,7 @@ void* treatClient(void* a) {
         for (;;) {
             if (read(acceptedSocket, buffer, MAX_BUFFER_SZ + 1) != 0)
                 break;
-            else {
-               // shutdown(acceptedSocket, 2);
-               // if (close(acceptedSocket) != 0)
-             //      perror("fechou mal no pequeno\n");
-                //return NULL;
-                return NULL;
-            }
+            return NULL;
         }
         token = buffer[0];
         switch (token) {
@@ -455,8 +447,6 @@ void treatConnection() {
         newServerSocket = accept(socketServer, (struct sockaddr*) &end_cli, &dim_cli);
         if (newServerSocket < 0) {
             perror("Servidor nao aceitou\n");
-            //close(socketServer);
-            //close(newServerSocket);
             return;
         }
         if (getsockopt(newServerSocket, SOL_SOCKET, SO_PEERCRED, &ucred, &len) == -1) {
