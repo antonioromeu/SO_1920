@@ -25,6 +25,7 @@ char* fileOutput = NULL;
 int numberBuckets = 1;
 int socketServer = 0;
 int counter = 0;
+int flag = 1;
 pthread_rwlock_t locker;
 pthread_t tid[MAX_THREADS];
 
@@ -338,6 +339,8 @@ void treatSignal(int signum) {
     printf("inicio do treatSignal\n");
     if (signal(SIGINT, treatSignal) == SIG_ERR)
         perror("Couldn't install signal\n");
+    printf("dentro do signal\n");
+    flag = 0;
     endProgram();
 }
 
@@ -443,9 +446,11 @@ void treatConnection() {
     dim_cli = sizeof(end_cli);
     len = sizeof(struct ucred);
     while (counter < MAX_THREADS) {
-        printf("comecou o while: %d\n", socketServer);
+        printf("comecou o while com flag: %d\n", flag);
         newServerSocket = accept(socketServer, (struct sockaddr*) &end_cli, &dim_cli);
-        if (newServerSocket < 0) {
+        if (!flag)
+            return;
+       if (newServerSocket < 0) {
             perror("Servidor nao aceitou\n");
             return;
         }
