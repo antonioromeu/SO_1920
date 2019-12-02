@@ -38,7 +38,7 @@ int tfsCreate(char* filename, permission ownerPermissions, permission othersPerm
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer))
         perror("Error cliente no write/create\n");
     read(clientSocket, &var, sizeof(var));
-    fflush(stdout);
+	fflush(stdout);
     free(buffer);
     return var;
 }
@@ -51,7 +51,7 @@ int tfsDelete(char* filename) {
     if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer))
         perror("Error cliente no write/delete\n");
     read(clientSocket, &var, sizeof(var));
-    fflush(stdout);
+	fflush(stdout);
     free(buffer);
     return var;
 }
@@ -99,18 +99,18 @@ int tfsRead(int fd, char* receiveBuffer, int len) {
     char* buffer = (char*) malloc(sizeof(char) * MAX_BUFFER);
     sprintf(buffer, "l %d %d", fd, len);
     strcat(buffer, "\0");
-    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) 
+    if (write(clientSocket, buffer, strlen(buffer)) != strlen(buffer)) { 
         perror("Error cliente no write/read\n");
-    read(clientSocket, &var, sizeof(var));
+		exit(EXIT_FAILURE);
+	}
+	read(clientSocket, &var, sizeof(var));
     if (var > 0) { 
         char* newBuffer = (char*) malloc(sizeof(char) * MAX_BUFFER);
         read(clientSocket, newBuffer, len);
         strncpy(receiveBuffer, newBuffer, len - 1);
         strcat(receiveBuffer, "\0");
         var = strlen(receiveBuffer);
-        free(buffer);
         free(newBuffer);
-        return var;
     }
     free(buffer);
     return var;

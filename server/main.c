@@ -93,15 +93,17 @@ int createFile(char* filename, int ownerPermissions, int othersPermissions, int 
     int var;
     if (lookup(fs, filename, numberBuckets) != -1)
         var = TECNICOFS_ERROR_FILE_ALREADY_EXISTS;
-    int iNumber = inode_create(clientID, (permission) ownerPermissions, (permission) othersPermissions);
-    if (iNumber == -1)
-        var = TECNICOFS_ERROR_OTHER;
-    else {
-        LOCK;
-        create(fs, filename, iNumber, numberBuckets);
-        UNLOCK;
-        var = 0;
-    }
+	else { 
+		int iNumber = inode_create(clientID, (permission) ownerPermissions, (permission) othersPermissions);
+		if (iNumber == -1)
+			var = TECNICOFS_ERROR_OTHER;
+		else {
+			LOCK;
+			create(fs, filename, iNumber, numberBuckets);
+			UNLOCK;
+			var = 0;
+		}
+	}
     write(acceptedSocket, &var, sizeof(var));
     return var; 
 }
@@ -111,67 +113,74 @@ int deleteFile(char* filename, fileNode* files, int clientID, int acceptedSocket
     LOCK;
     iNumber = lookup(fs, filename, numberBuckets);
     UNLOCK;
-    if (iNumber == -1)
+    inode_t* openNode = NULL;
+	if (iNumber == -1)
         var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (files[i] && files[i]->iNumber == iNumber)
-            var = TECNICOFS_ERROR_FILE_IS_OPEN;
-    }
-    inode_t* openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-    openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-    if (inode_get(iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
-        var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-    if (openNode->owner == clientID) {
-        if (inode_delete(iNumber) == -1)
-            var = TECNICOFS_ERROR_OTHER;
-        else {
-            LOCK;
-            delete(fs, filename, numberBuckets);
-            UNLOCK;
-            var = 0;
-        }
-    }
-    free(openNode->fileContent);
-    free(openNode);
+    else {
+		for (int i = 0; i < MAX_FILES; i++)
+			if (files[i] && files[i]->iNumber == iNumber) {
+				var = TECNICOFS_ERROR_FILE_IS_OPEN;
+				write(acceptedSocket, &var, sizeof(var));
+				return var;
+			}
+		openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
+		openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
+		if (inode_get(iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
+			var = TECNICOFS_ERROR_FILE_NOT_FOUND;
+		else if (openNode->owner == clientID) {
+			if (inode_delete(iNumber) == -1)
+				var = TECNICOFS_ERROR_OTHER;
+			else {
+				LOCK;
+				delete(fs, filename, numberBuckets);
+				UNLOCK;
+				var = 0;
+			}
+		}
+		free(openNode->fileContent);
+		free(openNode);
+	}
     write(acceptedSocket, &var, sizeof(var));
     return var;
 }
 
 int openFile(char* filename, int mode, fileNode* files, int clientID, int acceptedSocket) {
     int fd, counter = 0, var, i, iNumber = lookup(fs, filename, numberBuckets);
-    if (mode < 0 || mode > 4)
-        var = TECNICOFS_ERROR_INVALID_MODE;
-    for (i = 0; i < MAX_FILES; i++) {
-        if (!files[i]) {
-            fd = i;
-            break;
-        }
-    }
-    for (i = 0; i < MAX_FILES; i++) {
-        if (files[i]) {
-            counter++;
-            if (files[i]->iNumber == iNumber)
-                var = TECNICOFS_ERROR_FILE_IS_OPEN;
-        }
-    }
-    if ((i == MAX_FILES) && (counter == MAX_FILES))
-        var = TECNICOFS_ERROR_MAXED_OPEN_FILES;
-    iNumber = lookup(fs, filename, numberBuckets); 
-    inode_t* openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-    openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-    if (inode_get(iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
-        var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-    if ((mode == 2 && openNode->ownerPermissions == 1 && openNode->owner == clientID)
-        || (mode == 1 && openNode->ownerPermissions == 2 && openNode->owner == clientID)
-        || (mode == 2 && openNode->othersPermissions == 1 && openNode->owner != clientID)
-        || (mode == 1 && openNode->othersPermissions == 2 && openNode->owner != clientID))
+    inode_t* openNode = NULL;
+	if (mode < 0 || mode > 4)
         var = TECNICOFS_ERROR_INVALID_MODE;
     else {
-        files[fd] = (fileNode) calloc(1, sizeof(struct filenode));
-        files[fd]->openMode = mode;
-        files[fd]->iNumber = iNumber; 
-        var = 0;
-    }
+		for (i = 0; i < MAX_FILES; i++) {
+			if (!files[i]) {
+				fd = i;
+				break;
+			}
+		}
+		for (i = 0; i < MAX_FILES; i++) {
+			if (files[i]) {
+				counter++;
+				if (files[i]->iNumber == iNumber)
+					var = TECNICOFS_ERROR_FILE_IS_OPEN;
+			}
+		}
+		if ((i == MAX_FILES) && (counter == MAX_FILES))
+			var = TECNICOFS_ERROR_MAXED_OPEN_FILES;
+		else {
+			iNumber = lookup(fs, filename, numberBuckets); 
+			openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
+			openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
+			if (inode_get(iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
+				var = TECNICOFS_ERROR_FILE_NOT_FOUND;
+			else if ((mode == 2 && openNode->ownerPermissions == 1 && openNode->owner == clientID) || (mode == 1 && openNode->ownerPermissions == 2 && openNode->owner == clientID) || (mode == 2 && openNode->othersPermissions == 1 && openNode->owner != clientID) || (mode == 1 && openNode->othersPermissions == 2 && openNode->owner != clientID))
+				var = TECNICOFS_ERROR_INVALID_MODE;
+			else {
+				files[fd] = (fileNode) calloc(1, sizeof(struct filenode));
+				files[fd]->openMode = mode;
+				files[fd]->iNumber = iNumber; 
+				var = 0;
+			}
+		}
+	}
     write(acceptedSocket, &var, sizeof(fd));
     free(openNode->fileContent);
     free(openNode);
@@ -184,6 +193,7 @@ int closeFile(int fd, fileNode* files, int acceptedSocket) {
         var = TECNICOFS_ERROR_FILE_NOT_OPEN;
     else {
         free(files[fd]);
+		files[fd] = NULL;
         var = 0;
     }
     write(acceptedSocket, &var, sizeof(var));
@@ -192,53 +202,64 @@ int closeFile(int fd, fileNode* files, int acceptedSocket) {
 
 int readFile(int fd, int len, fileNode* files, int clientID, int acceptedSocket) {
     char* buffer = NULL;
-    int var;
+    inode_t* openNode = NULL;
+	int var;
     if (files[fd] == NULL)
         var = TECNICOFS_ERROR_FILE_NOT_OPEN;
-    inode_t* openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-    openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-    if (inode_get(files[fd]->iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, len) == -1)
-        var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-    if ((openNode->owner == clientID && openNode->ownerPermissions == 1) || (openNode->owner != clientID && openNode->othersPermissions == 1))
-        var = TECNICOFS_ERROR_PERMISSION_DENIED;
-    if (files[fd]->openMode == 0 || files[fd]->openMode == 1)
-        var = TECNICOFS_ERROR_INVALID_MODE;
     else {
-        buffer = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-        strncpy(buffer, openNode->fileContent, len - 1);
-        strcat(buffer, "\0");
-        var = strlen(buffer);
-    }
+		openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
+		openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
+		if (inode_get(files[fd]->iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, len) == -1)
+			var = TECNICOFS_ERROR_FILE_NOT_FOUND;
+		else if ((openNode->owner == clientID && openNode->ownerPermissions == 1) || (openNode->owner != clientID && openNode->othersPermissions == 1))
+			var = TECNICOFS_ERROR_PERMISSION_DENIED;
+		else if (files[fd]->openMode == 0 || files[fd]->openMode == 1)
+			var = TECNICOFS_ERROR_INVALID_MODE;
+		else {
+			buffer = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
+			strncpy(buffer, openNode->fileContent, len - 1);
+			strcat(buffer, "\0");
+			var = strlen(buffer);
+			write(acceptedSocket, &var, sizeof(var));
+			write(acceptedSocket, buffer, strlen(buffer));
+    		free(openNode->fileContent);
+			free(openNode);
+			free(buffer);
+			return var;
+		}
+		free(openNode->fileContent);
+		free(openNode);
+	}
     write(acceptedSocket, &var, sizeof(var));
-    write(acceptedSocket, buffer, strlen(buffer));
-    free(openNode->fileContent);
-    free(openNode);
-    free(buffer);
     return var;
 }
+
 int renameFile(char* oldName, char* newName, int clientID, int acceptedSocket) {
     int searchResult1, searchResult2, var;
-    LOCK;
+    inode_t* openNode = NULL;
+	LOCK;
     searchResult1 = lookup(fs, oldName, numberBuckets);
     searchResult2 = lookup(fs, newName, numberBuckets);
     UNLOCK;
     if (searchResult1 == -1)
         var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-    if (searchResult2 != -1)
+    else if (searchResult2 != -1)
         var = TECNICOFS_ERROR_FILE_ALREADY_EXISTS;
-    inode_t* openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-    openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-    if (inode_get(searchResult1, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
-        var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-    if (openNode->owner != clientID)
-        var = TECNICOFS_ERROR_PERMISSION_DENIED;
     else {
-        LOCK;
-        delete(fs, oldName, numberBuckets);
-        create(fs, newName, searchResult1, numberBuckets);
-        UNLOCK;
-        var = 0;
-    }
+		openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
+		openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
+		if (inode_get(searchResult1, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
+			var = TECNICOFS_ERROR_FILE_NOT_FOUND;
+		else if (openNode->owner != clientID)
+			var = TECNICOFS_ERROR_PERMISSION_DENIED;
+		else {
+			LOCK;
+			delete(fs, oldName, numberBuckets);
+			create(fs, newName, searchResult1, numberBuckets);
+			UNLOCK;
+			var = 0;
+		}
+	}
     free(openNode->fileContent);
     free(openNode);
     write(acceptedSocket, &var, sizeof(var));
@@ -247,25 +268,27 @@ int renameFile(char* oldName, char* newName, int clientID, int acceptedSocket) {
 
 int writeFile(int fd, char* buffer, int len, fileNode* files, int clientID, int acceptedSocket) {
     int var;
-    if (files[fd] == NULL)
+    inode_t* openNode = NULL;
+	if (files[fd] == NULL)
         var = TECNICOFS_ERROR_FILE_NOT_OPEN;
-    inode_t* openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-    openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-    if (inode_get(files[fd]->iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
-        var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-    if ((openNode->owner == clientID && openNode->ownerPermissions == 2) || (openNode->owner != clientID && openNode->othersPermissions == 2))
-        var = TECNICOFS_ERROR_PERMISSION_DENIED;
-    if (files[fd]->openMode == 0 || files[fd]->openMode == 2)
-        var = TECNICOFS_ERROR_INVALID_MODE;
-    else {
-        var = 0;
-        inode_set(files[fd]->iNumber, buffer, len);
-    }
+	else {
+		openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
+		openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
+		if (inode_get(files[fd]->iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
+			var = TECNICOFS_ERROR_FILE_NOT_FOUND;
+		else if ((openNode->owner == clientID && openNode->ownerPermissions == 2) || (openNode->owner != clientID && openNode->othersPermissions == 2))
+			var = TECNICOFS_ERROR_PERMISSION_DENIED;
+		else if (files[fd]->openMode == 0 || files[fd]->openMode == 2)
+			var = TECNICOFS_ERROR_INVALID_MODE;
+		else {
+			var = 0;
+			inode_set(files[fd]->iNumber, buffer, len);
+		}
+	}
     write(acceptedSocket, &var, sizeof(var));
     free(openNode->fileContent);
     free(openNode);
-    return len;
-    //return var ??
+    return var;
 }
 
 void endProgram() {
@@ -273,7 +296,8 @@ void endProgram() {
         if (pthread_join(tid[i], NULL)  != 0)
             perror("Couldn't join threads\n");
         close(Args[i]->acceptedSocket);
-        free(Args[i]);
+        free(Args[i]->files);
+		free(Args[i]);
     }
     free(Args);
     close(socketServer);
@@ -396,7 +420,7 @@ void treatConnection() {
         newServerSocket = accept(socketServer, (struct sockaddr*) &end_cli, &dim_cli);
         if (!flag)
             return;
-       if (newServerSocket < 0) {
+		if (newServerSocket < 0) {
             perror("Server couldn't accept client\n");
             return;
         }
@@ -418,7 +442,6 @@ void treatConnection() {
             perror("Couldn't install signal handler\n");
             exit(-1);
         }
-        free(files);
     }
     return;
 }
