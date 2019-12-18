@@ -5,7 +5,7 @@ This project consists on a program for managing multiples files in a file manage
 ## Authors
 
 * António Romeu Pinheiro
-* Leonor Veloso
+* Lúcia Silva
 
 ## Acknowledgments
 
