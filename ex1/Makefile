@@ -3,7 +3,7 @@
 
 CC   = gcc
 LD   = gcc
-CFLAGS =-g -Wall -std=gnu99 -I../
+CFLAGS = -Wall -std=gnu99 -I../
 
 LDFLAGS=-lm -pthread
 
@@ -11,29 +11,35 @@ LDFLAGS=-lm -pthread
 # https://www.gnu.org/software/make/manual/html_node/Phony-Targets.html
 .PHONY: all clean run
 
-all: tecnicofs
+all: tecnicofs-nosync tecnicofs-mutex tecnicofs-rwlock
 
-tecnicofs: lib/bst.o lib/hash.o lib/inodes.o fs.o main-rwlock.o
-	$(LD) $(CFLAGS) $(LDFLAGS) -DRWLOCK -o tecnicofs lib/bst.o lib/hash.o lib/inodes.o fs.o main.o
+tecnicofs-nosync: lib/bst.o fs.o main-nosync.o
+	$(LD) $(CFLAGS) $(LDFLAGS) -o tecnicofs-nosync lib/bst.o fs.o main-nosync.o
+
+tecnicofs-mutex: lib/bst.o fs.o main-mutex.o
+	$(LD) $(CFLAGS) $(LDFLAGS) -DMUTEX -o tecnicofs-mutex lib/bst.o fs.o main-mutex.o
+
+tecnicofs-rwlock: lib/bst.o fs.o main-rwlock.o
+	$(LD) $(CFLAGS) $(LDFLAGS) -DRWLOCK -o tecnicofs-rwlock lib/bst.o fs.o main-rwlock.o
 
 lib/bst.o: lib/bst.c lib/bst.h
 	$(CC) $(CFLAGS) -o lib/bst.o -c lib/bst.c
 
-lib/hash.o: lib/hash.c lib/hash.h
-	$(CC) $(CFLAGS) -o lib/hash.o -c lib/hash.c
-
-lib/inodes.o: lib/inodes.c lib/inodes.h
-	$(CC) $(CFLAGS) -o lib/inodes.o -c lib/inodes.c
-
-fs.o: fs.c fs.h lib/bst.h lib/hash.h
+fs.o: fs.c fs.h lib/bst.h
 	$(CC) $(CFLAGS) -o fs.o -c fs.c
 
-main-rwlock.o: main.c fs.h lib/bst.h lib/hash.h lib/inodes.h
-	$(CC) $(CFLAGS) -DRWLOCK -o main.o -c main.c
+main-nosync.o: main.c fs.h lib/bst.h
+	$(CC) $(CFLAGS) -o main-nosync.o -c main.c
+
+main-mutex.o: main.c fs.h lib/bst.h
+	$(CC) $(CFLAGS) -DMUTEX -o main-mutex.o -c main.c
+
+main-rwlock.o: main.c fs.h lib/bst.h
+	$(CC) $(CFLAGS) -DRWLOCK -o main-rwlock.o -c main.c
 
 clean:
 	@echo Cleaning...
-	rm -f lib/*.o *.o tecnicofs
+	rm -f lib/*.o *.o tecnicofs-nosync tecnicofs-mutex tecnicofs-rwlock
 
 run: tecnicofs
 	./tecnicofs

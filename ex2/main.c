@@ -2,448 +2,321 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <signal.h>
+#include <semaphore.h>
 #include <sys/time.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include "fs.h"
-#include "../client/tecnicofs-api-constants.h"
 
-#define _GNU_SOURCE
-#define MAX_FILES 5
-#define MAX_CONNECTIONS_WAITING 10
-#define MAX_THREADS 10
-#define MAX_BUFFER_SZ 100
+#define MAX_COMMANDS 10
+#define MAX_INPUT_SIZE 100
 
 tecnicofs* fs;
-char* socketName = NULL;
+char* fileInput = NULL;
 char* fileOutput = NULL;
+char inputCommands[MAX_COMMANDS][MAX_INPUT_SIZE];
+int numberCommands = 0;
+int numberThreads = 0;
 int numberBuckets = 1;
-int socketServer = 0;
-int counter = 0;
+int headQueue = 0;
 int flag = 1;
-pthread_rwlock_t locker;
-pthread_t tid[MAX_THREADS];
+sem_t sem_prod;
+sem_t sem_cons;
 
-typedef struct filenode {
-    int fd;
-    int iNumber;
-    int openMode;
-} * fileNode;
+#ifdef RWLOCK
+pthread_rwlock_t commandsLocker;
+pthread_rwlock_t* vecLock;
+#define INIT(A) { \
+    vecLock = (pthread_rwlock_t*) malloc(sizeof(pthread_rwlock_t) * A); \
+    if (pthread_rwlock_init(&commandsLocker, NULL)) \
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if (pthread_rwlock_init(&vecLock[i], NULL)) \
+            exit(EXIT_FAILURE); }
+#define LOCK(A) pthread_rwlock_wrlock(&A)
+#define UNLOCK(A) pthread_rwlock_unlock(&A)
+#define DESTROY(A) { \
+    if (pthread_rwlock_destroy(&commandsLocker)) \
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if (pthread_rwlock_destroy(&vecLock[i])); }
+#else //Caso flag nosync ou mutex
+pthread_mutex_t commandsLocker;
+pthread_mutex_t* vecLock;
+#define INIT(A) { \
+    vecLock = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t) * A); \
+    if (pthread_mutex_init(&commandsLocker, NULL)) \
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if(pthread_mutex_init(&vecLock[i], NULL)) \
+            exit(EXIT_FAILURE); }
+#define LOCK(A) pthread_mutex_lock(&A)
+#define UNLOCK(A) pthread_mutex_unlock(&A)
+#define DESTROY(A) { \
+    if (pthread_mutex_destroy(&commandsLocker)) \
+        exit(EXIT_FAILURE); \
+    for (int i = 0; i < A; i++) \
+        if (pthread_mutex_destroy(&vecLock[i])); }
+#endif
 
-typedef struct arg_struct {
-    int acceptedSocket;
-    int userID;
-    fileNode* files;
-} args;
-
-struct ucred {
-    pid_t pid;
-    uid_t uid;
-    gid_t gid;
-};
-
-args** Args;
-#define INIT { \
-    if (pthread_rwlock_init(&locker, NULL)) \
-        exit(EXIT_FAILURE); }
-#define LOCK pthread_rwlock_wrlock(&locker)
-#define UNLOCK pthread_rwlock_unlock(&locker)
-#define DESTROY { \
-    if (pthread_rwlock_destroy(&locker)) \
-        exit(EXIT_FAILURE); }
-
-static void displayUsage(const char* appName) {
-    printf("Usage: %s input_filepath output_filepath buckets_number\n", appName);
+static void displayUsage (const char* appName) {
+    printf("Usage: %s input_filepath output_filepath threads_number buckets_number\n", appName);
     exit(EXIT_FAILURE);
 }
 
-static void parseArgs(long argc, char* const argv[]) {
-    if (argc != 4) {
-        perror("Invalid format:\n");
+static void parseArgs (long argc, char* const argv[]) {
+    if (argc != 5) {
+        fprintf(stderr, "Invalid format:\n");
         displayUsage(argv[0]);
     }
-    socketName = argv[1];
+    fileInput = argv[1];
     fileOutput = argv[2];
-}
-
-void createSocket(char* address) {
-    int servlen;
-    struct sockaddr_un serv_addr;
-    if ((socketServer = socket(AF_UNIX,SOCK_STREAM,0) ) < 0) {
-        perror("Server couldn't create socket\n");
+    numberThreads = atoi(argv[3]);
+    numberBuckets = atoi(argv[4]);
+    if (!numberThreads || !numberBuckets || numberThreads < 1 || numberBuckets < 1) {
+        fprintf(stderr, "Invalid arguments, insert the correct type of arguments\n");
         exit(EXIT_FAILURE);
     }
-    unlink(address); 
-    bzero((char*) &serv_addr, sizeof(serv_addr)); 
-    serv_addr.sun_family = AF_UNIX; 
-    strcpy(serv_addr.sun_path, address); 
-    servlen = strlen(serv_addr.sun_path) + sizeof(serv_addr.sun_family); 
-    if (bind(socketServer, (struct sockaddr*) &serv_addr, servlen) < 0) {
-        perror("Server couldn't bind\n");
-        exit(EXIT_FAILURE);
+    else if (numberThreads > 1 || numberBuckets > 1) {
+        #ifdef MUTEX
+        return;
+        #endif
+        #ifdef RWLOCK
+        return;
+        #endif
     }
-    listen(socketServer, MAX_CONNECTIONS_WAITING);
+    numberThreads = 1;
+    numberBuckets = 1;
 }
 
-int createFile(char* filename, int ownerPermissions, int othersPermissions, int clientID, int acceptedSocket) {
-    int var;
-    if (lookup(fs, filename, numberBuckets) != -1)
-        var = TECNICOFS_ERROR_FILE_ALREADY_EXISTS;
-	else { 
-		int iNumber = inode_create(clientID, (permission) ownerPermissions, (permission) othersPermissions);
-		if (iNumber == -1)
-			var = TECNICOFS_ERROR_OTHER;
-		else {
-			LOCK;
-			create(fs, filename, iNumber, numberBuckets);
-			UNLOCK;
-			var = 0;
-		}
-	}
-    write(acceptedSocket, &var, sizeof(var));
-    return var; 
-}
-
-int deleteFile(char* filename, fileNode* files, int clientID, int acceptedSocket) {
-    int var, iNumber;
-    LOCK;
-    iNumber = lookup(fs, filename, numberBuckets);
-    UNLOCK;
-    inode_t* openNode = NULL;
-	if (iNumber == -1)
-        var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-    else {
-		for (int i = 0; i < MAX_FILES; i++)
-			if (files[i] && files[i]->iNumber == iNumber) {
-				var = TECNICOFS_ERROR_FILE_IS_OPEN;
-				write(acceptedSocket, &var, sizeof(var));
-				return var;
-			}
-		openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-		openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-		if (inode_get(iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
-			var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-		else if (openNode->owner == clientID) {
-			if (inode_delete(iNumber) == -1)
-				var = TECNICOFS_ERROR_OTHER;
-			else {
-				LOCK;
-				delete(fs, filename, numberBuckets);
-				UNLOCK;
-				var = 0;
-			}
-		}
-		free(openNode->fileContent);
-		free(openNode);
-	}
-    write(acceptedSocket, &var, sizeof(var));
-    return var;
-}
-
-int openFile(char* filename, int mode, fileNode* files, int clientID, int acceptedSocket) {
-    int fd, counter = 0, var, i, iNumber = lookup(fs, filename, numberBuckets);
-    inode_t* openNode = NULL;
-	if (mode < 0 || mode > 4)
-        var = TECNICOFS_ERROR_INVALID_MODE;
-    else {
-		for (i = 0; i < MAX_FILES; i++) {
-			if (!files[i]) {
-				fd = i;
-				break;
-			}
-		}
-		for (i = 0; i < MAX_FILES; i++) {
-			if (files[i]) {
-				counter++;
-				if (files[i]->iNumber == iNumber)
-					var = TECNICOFS_ERROR_FILE_IS_OPEN;
-			}
-		}
-		if ((i == MAX_FILES) && (counter == MAX_FILES))
-			var = TECNICOFS_ERROR_MAXED_OPEN_FILES;
-		else {
-			iNumber = lookup(fs, filename, numberBuckets); 
-			openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-			openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-			if (inode_get(iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
-				var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-			else if ((mode == 2 && openNode->ownerPermissions == 1 && openNode->owner == clientID) || (mode == 1 && openNode->ownerPermissions == 2 && openNode->owner == clientID) || (mode == 2 && openNode->othersPermissions == 1 && openNode->owner != clientID) || (mode == 1 && openNode->othersPermissions == 2 && openNode->owner != clientID))
-				var = TECNICOFS_ERROR_INVALID_MODE;
-			else {
-				files[fd] = (fileNode) calloc(1, sizeof(struct filenode));
-				files[fd]->openMode = mode;
-				files[fd]->iNumber = iNumber; 
-				var = 0;
-			}
-		}
-	}
-    write(acceptedSocket, &var, sizeof(fd));
-    free(openNode->fileContent);
-    free(openNode);
-    return var;
-}
-
-int closeFile(int fd, fileNode* files, int acceptedSocket) {
-    int var;
-    if (files[fd] == NULL)
-        var = TECNICOFS_ERROR_FILE_NOT_OPEN;
-    else {
-        free(files[fd]);
-		files[fd] = NULL;
-        var = 0;
+int insertCommand(char* data) {
+    sem_wait(&sem_prod); 
+    LOCK(commandsLocker);
+    if (numberCommands != MAX_COMMANDS) {
+        strcpy(inputCommands[(numberCommands + headQueue) % MAX_COMMANDS], data);
+        numberCommands++;
+        UNLOCK(commandsLocker);
+        sem_post(&sem_cons);
+        return 1;
     }
-    write(acceptedSocket, &var, sizeof(var));
-    return var;
+    UNLOCK(commandsLocker);
+    return 0;
 }
 
-int readFile(int fd, int len, fileNode* files, int clientID, int acceptedSocket) {
-    char* buffer = NULL;
-    inode_t* openNode = NULL;
-	int var;
-    if (files[fd] == NULL)
-        var = TECNICOFS_ERROR_FILE_NOT_OPEN;
-    else {
-		openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-		openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-		if (inode_get(files[fd]->iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, len) == -1)
-			var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-		else if ((openNode->owner == clientID && openNode->ownerPermissions == 1) || (openNode->owner != clientID && openNode->othersPermissions == 1))
-			var = TECNICOFS_ERROR_PERMISSION_DENIED;
-		else if (files[fd]->openMode == 0 || files[fd]->openMode == 1)
-			var = TECNICOFS_ERROR_INVALID_MODE;
-		else {
-			buffer = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-			strncpy(buffer, openNode->fileContent, len - 1);
-			strcat(buffer, "\0");
-			var = strlen(buffer);
-			write(acceptedSocket, &var, sizeof(var));
-			write(acceptedSocket, buffer, strlen(buffer));
-    		free(openNode->fileContent);
-			free(openNode);
-			free(buffer);
-			return var;
-		}
-		free(openNode->fileContent);
-		free(openNode);
-	}
-    write(acceptedSocket, &var, sizeof(var));
-    return var;
-}
-
-int renameFile(char* oldName, char* newName, int clientID, int acceptedSocket) {
-    int searchResult1, searchResult2, var;
-    inode_t* openNode = NULL;
-	LOCK;
-    searchResult1 = lookup(fs, oldName, numberBuckets);
-    searchResult2 = lookup(fs, newName, numberBuckets);
-    UNLOCK;
-    if (searchResult1 == -1)
-        var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-    else if (searchResult2 != -1)
-        var = TECNICOFS_ERROR_FILE_ALREADY_EXISTS;
-    else {
-		openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-		openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-		if (inode_get(searchResult1, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
-			var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-		else if (openNode->owner != clientID)
-			var = TECNICOFS_ERROR_PERMISSION_DENIED;
-		else {
-			LOCK;
-			delete(fs, oldName, numberBuckets);
-			create(fs, newName, searchResult1, numberBuckets);
-			UNLOCK;
-			var = 0;
-		}
-	}
-    free(openNode->fileContent);
-    free(openNode);
-    write(acceptedSocket, &var, sizeof(var));
-    return var;
-}
-
-int writeFile(int fd, char* buffer, int len, fileNode* files, int clientID, int acceptedSocket) {
-    int var;
-    inode_t* openNode = NULL;
-	if (files[fd] == NULL)
-        var = TECNICOFS_ERROR_FILE_NOT_OPEN;
-	else {
-		openNode = (inode_t*) calloc(1, sizeof(struct inode_t));
-		openNode->fileContent = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-		if (inode_get(files[fd]->iNumber, &openNode->owner, &openNode->ownerPermissions, &openNode->othersPermissions, openNode->fileContent, strlen(openNode->fileContent)) == -1)
-			var = TECNICOFS_ERROR_FILE_NOT_FOUND;
-		else if ((openNode->owner == clientID && openNode->ownerPermissions == 2) || (openNode->owner != clientID && openNode->othersPermissions == 2))
-			var = TECNICOFS_ERROR_PERMISSION_DENIED;
-		else if (files[fd]->openMode == 0 || files[fd]->openMode == 2)
-			var = TECNICOFS_ERROR_INVALID_MODE;
-		else {
-			var = 0;
-			inode_set(files[fd]->iNumber, buffer, len);
-		}
-	}
-    write(acceptedSocket, &var, sizeof(var));
-    free(openNode->fileContent);
-    free(openNode);
-    return var;
-}
-
-void endProgram() {
-    for (int i = 0; i < counter; i++) {
-        if (pthread_join(tid[i], NULL)  != 0)
-            perror("Couldn't join threads\n");
-        close(Args[i]->acceptedSocket);
-        free(Args[i]->files);
-		free(Args[i]);
+char* removeCommand() {
+    if (numberCommands > 0) {
+        numberCommands--;
+        char* command = inputCommands[headQueue % MAX_COMMANDS];
+        headQueue = (headQueue + 1) % MAX_COMMANDS;
+        return command;
     }
-    free(Args);
-    close(socketServer);
-    return;
+    return NULL;
 }
 
-void treatSignal(int signum) {
-    if (signal(SIGINT, treatSignal) == SIG_ERR)
-        perror("Couldn't install signal\n");
-    flag = 0;
-    endProgram();
+void errorParse() {
+    fprintf(stderr, "Error: command invalid\n");
 }
 
-void* treatClient(void* a) {
-    int numTokens, fd, len, mode, ownerPermissions, othersPermissions;
-    sigset_t set;
-    int s;
-    sigemptyset(&set);
-    sigaddset(&set, SIGINT);
-    s = pthread_sigmask(SIG_BLOCK, &set, NULL);
-    if (s != 0)
-        perror("Coundn't create sigmask\n");
-    args* Args = (args*) a;
-    int acceptedSocket = Args->acceptedSocket;
-    fileNode* files = Args->files;
-    int clientID = Args->userID;
-    char token;
-    char* buffer = NULL;
-    char* filename = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-    char* newFilename = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-    char* sendBuffer = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-    while (1) {
-        free(buffer);
-        buffer = (char*) calloc(MAX_BUFFER_SZ, sizeof(char));
-        for (;;) {
-            if (read(acceptedSocket, buffer, MAX_BUFFER_SZ) != 0)
-                break;
-            free(buffer);
-            free(filename);
-            free(newFilename);
-            free(sendBuffer);
-            return NULL;
+void commandRename(char* name, char* rname) {
+    int searchResult1;
+    int searchResult2;
+    if (hash(name, numberBuckets) == hash(rname, numberBuckets)) {
+        LOCK(vecLock[hash(name, numberBuckets)]);
+        searchResult1 = lookup(fs, name, numberBuckets);
+        searchResult2 = lookup(fs, rname, numberBuckets);
+        if (!searchResult1) {
+            printf("%s file not found\n", name);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            return;
         }
-        token = buffer[0];
+        if (searchResult2) {
+            printf("%s file already exists\n", rname);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            return;
+        }
+        delete(fs, name, numberBuckets);
+        create(fs, rname, searchResult1, numberBuckets);
+        UNLOCK(vecLock[hash(name, numberBuckets)]);
+    }
+    else if (hash(name, numberBuckets) < hash(rname, numberBuckets)) {
+        LOCK(vecLock[hash(name, numberBuckets)]);
+        LOCK(vecLock[hash(rname, numberBuckets)]);
+        searchResult1 = lookup(fs, name, numberBuckets);
+        if (!searchResult1) {
+            printf("%s file not found\n", name);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            UNLOCK(vecLock[hash(rname, numberBuckets)]);
+            return;
+        }
+        searchResult2 = lookup(fs, rname, numberBuckets);
+        if (searchResult2) {
+            printf("%s file already exists\n", rname);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            UNLOCK(vecLock[hash(rname, numberBuckets)]);
+            return;
+        }
+        delete(fs, name, numberBuckets);
+        create(fs, rname, searchResult1, numberBuckets);
+        UNLOCK(vecLock[hash(rname, numberBuckets)]);
+        UNLOCK(vecLock[hash(name, numberBuckets)]);
+    }
+    else {
+        LOCK(vecLock[hash(rname, numberBuckets)]);
+        LOCK(vecLock[hash(name, numberBuckets)]);
+        searchResult1 = lookup(fs, name, numberBuckets);
+        if (!searchResult1) {
+            printf("%s file not found\n", name);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            UNLOCK(vecLock[hash(rname, numberBuckets)]);
+            return;
+        }
+        searchResult2 = lookup(fs, rname, numberBuckets);
+        if (searchResult2) {
+            printf("%s file already exists\n", rname);
+            UNLOCK(vecLock[hash(name, numberBuckets)]);
+            UNLOCK(vecLock[hash(rname, numberBuckets)]);
+            return;
+        }
+        delete(fs, name, numberBuckets);
+        create(fs, rname, searchResult1, numberBuckets);
+        UNLOCK(vecLock[hash(name, numberBuckets)]);
+        UNLOCK(vecLock[hash(rname, numberBuckets)]);
+    }
+}
+
+void* processInput() {
+    FILE* fptr  = fopen(fileInput, "r");
+    if (!fptr) {
+        fprintf(stderr, "Error: Could not read %s\n", fileInput);
+        exit(EXIT_FAILURE);
+    }
+    char line[MAX_INPUT_SIZE];
+    while (fgets(line, sizeof(line)/sizeof(char), fptr)) {
+        char token;
+        char name[MAX_INPUT_SIZE];
+        int numTokens = sscanf(line, "%c %s", &token, name);
+        if (numTokens < 1)
+            continue;
         switch (token) {
-            case 'c':
-                numTokens = sscanf(buffer, "%c %s %1d%1d", &token, filename, &ownerPermissions, &othersPermissions);
-                if (numTokens != 4) {
-                    perror("Error on command c\n");
-                    return NULL;
-                }
-                createFile(filename, ownerPermissions, othersPermissions, clientID, acceptedSocket);
-                continue; 
-            case 'd':
-                numTokens = sscanf(buffer, "%c %s", &token, filename);
-                if (numTokens != 2) {
-                    perror("Error on command d\n");
-                    return NULL;
-                }
-                deleteFile(filename, files, clientID, acceptedSocket);
-                continue;
             case 'r':
-                numTokens = sscanf(buffer, "%c %s %s", &token, filename, newFilename);
-                if (numTokens != 3) {
-                    perror("Error on command r\n");
-                    return NULL;
-                }
-                renameFile(filename, newFilename, clientID, acceptedSocket);
-                continue;
-            case 'o':
-                numTokens = sscanf(buffer, "%c %s %1d", &token, filename, &mode);
-                if (numTokens != 3) {
-                    perror("Error on command o\n");
-                    return NULL;
-                }
-                openFile(filename, mode, files, clientID, acceptedSocket);
-                continue;
-            case 'x':
-                numTokens = sscanf(buffer, "%c %d", &token, &fd);
-                if (numTokens != 2) {
-                    perror("Error on command x\n");
-                    return NULL;
-                }
-                closeFile(fd, files, acceptedSocket);
-                continue;
+            case 'c':
             case 'l':
-                numTokens = sscanf(buffer, "%c %d %d", &token, &fd, &len);
-                if (numTokens != 3) {
-                    perror("Error on command l\n");
-                    return NULL;
-                }
-                readFile(fd, len, files, clientID, acceptedSocket);
-                continue;
-            case 'w':
-                numTokens = sscanf(buffer, "%c %d %s", &token, &fd, sendBuffer);
-                if (numTokens != 3) {
-                    perror("Error on command w\n");
-                    return NULL;
-                }
-                writeFile(fd, sendBuffer, strlen(sendBuffer), files, clientID, acceptedSocket);
-                continue;
-            default:
-                perror("Default error\n");
+            case 'd':
+                if (numTokens != 2)
+                    errorParse();
+                else if (insertCommand(line))
+                    break;
                 return NULL;
+            case '#':
                 break;
+            default:
+                errorParse();
+        }
+    }
+    fclose(fptr);
+    insertCommand("x");
+    return NULL;
+}
+
+void* applyCommands() {
+    while (1) {
+        sem_wait(&sem_cons);
+        LOCK(commandsLocker);
+        const char* command = removeCommand();
+	    if (!command) {
+	        fprintf(stderr, "Error: command is null\n");
+            UNLOCK(commandsLocker);
+            exit(EXIT_FAILURE);
+	    }
+        if (command[0] == 'x') {
+            headQueue = (headQueue - 1) % MAX_COMMANDS;
+            numberCommands = numberCommands + 1;
+            UNLOCK(commandsLocker);
+            sem_post(&sem_cons);
+            break;
+        }
+	    int iNumber;
+        int searchResult;
+        char token;
+	    char name[MAX_INPUT_SIZE];
+        char rname[MAX_INPUT_SIZE];
+        if (command[0] == 'c')
+            iNumber = obtainNewInumber(fs);
+        int numTokens = sscanf(command, "%c %s", &token, name);
+	    UNLOCK(commandsLocker);
+        sem_post(&sem_prod);
+        switch (token) {
+	        case 'c':
+	            if (numTokens != 2) {
+	                fprintf(stderr, "Error: invalid command in Queue\n");
+                    exit(EXIT_FAILURE);
+                }
+		        LOCK(vecLock[hash(name, numberBuckets)]);
+                create(fs, name, iNumber, numberBuckets);
+                UNLOCK(vecLock[hash(name, numberBuckets)]);
+                break;
+            case 'l':
+	            if (numTokens != 2) {
+	                fprintf(stderr, "Error: invalid command in Queue\n");
+                    exit(EXIT_FAILURE);
+                }
+                LOCK(vecLock[hash(name, numberBuckets)]);
+                searchResult = lookup(fs, name, numberBuckets);
+                UNLOCK(vecLock[hash(name, numberBuckets)]);
+                if (!searchResult)
+                    printf("%s not found\n", name);
+                else
+                    printf("%s found with inumber %d\n", name, searchResult);
+                break;
+            case 'd':
+	            if (numTokens != 2) {
+	                fprintf(stderr, "Error: invalid command in Queue\n");
+                    exit(EXIT_FAILURE);
+                }
+                LOCK(vecLock[hash(name, numberBuckets)]);
+                delete(fs, name, numberBuckets);
+                UNLOCK(vecLock[hash(name, numberBuckets)]);
+                break;
+            case 'r':
+                numTokens = sscanf(command, "%c %s %s", &token, name, rname);
+                if (numTokens != 3) {
+                    fprintf(stderr, "Error: invalid command in Queue\n");
+                    exit(EXIT_FAILURE);
+                }
+                commandRename(name, rname);
+                break;
+            default:
+		        fprintf(stderr, "Error: command to apply\n");
+                exit(EXIT_FAILURE);
         }
     }
     return NULL;
 }
 
-void treatConnection() {
-    int newServerSocket;
-    struct sockaddr_un end_cli;
-    unsigned int len, dim_cli;
-    struct ucred ucred;
-    Args = (args**) calloc(MAX_THREADS, sizeof(struct arg_struct));
-    dim_cli = sizeof(end_cli);
-    len = sizeof(struct ucred);
-    while (counter < MAX_THREADS) {
-        newServerSocket = accept(socketServer, (struct sockaddr*) &end_cli, &dim_cli);
-        if (!flag)
-            return;
-		if (newServerSocket < 0) {
-            perror("Server couldn't accept client\n");
-            return;
-        }
-        if (getsockopt(newServerSocket, SOL_SOCKET, SO_PEERCRED, &ucred, &len) == -1) {
-            perror("Error on function getsockopt\n");
+void applyThread() {
+    INIT(numberBuckets);
+    pthread_t processor;
+    pthread_t workers[numberThreads];
+    sem_init(&sem_prod, 0, MAX_COMMANDS);
+    sem_init(&sem_cons, 0, 0);
+    int err1 = pthread_create(&processor, NULL, processInput, NULL);
+    if (err1 != 0) {
+      fprintf(stderr, "Can't create thread\n");
+      exit(EXIT_FAILURE);
+    }
+    for (int i = 0; i < numberThreads; i++) {
+        int err2 = pthread_create(&workers[i], NULL, applyCommands, NULL);
+        if (err2 != 0) {
+            fprintf(stderr, "Can't create thread\n");
             exit(EXIT_FAILURE);
-        }
-        fileNode* files = (fileNode*) calloc(MAX_FILES, sizeof(struct filenode));
-        Args[counter] = (args*) calloc(1, sizeof(struct arg_struct));
-        Args[counter]->acceptedSocket = newServerSocket;
-        Args[counter]->files = files;
-        Args[counter]->userID = ucred.uid;
-        if (pthread_create(&tid[counter], NULL, treatClient, Args[counter])) {
-            perror("Couldn't create thread\n");
-            exit(EXIT_FAILURE);
-        }
-        counter++;
-        if (signal(SIGINT, treatSignal) == SIG_ERR) {
-            perror("Couldn't install signal handler\n");
-            exit(-1);
         }
     }
-    return;
+    if (pthread_join(processor, NULL))
+        fprintf(stderr, "Can't join thread\n");
+    for (int i = 0; i < numberThreads; i++)
+        if (pthread_join(workers[i], NULL))
+            fprintf(stderr, "Can't join thread\n");
+    sem_destroy(&sem_prod);
+    sem_destroy(&sem_cons);
+    DESTROY(numberBuckets);
 }
 
 int main(int argc, char* argv[]) {
@@ -451,18 +324,15 @@ int main(int argc, char* argv[]) {
     double seconds, micros;
     parseArgs(argc, argv);
     gettimeofday(&start, NULL);
-    inode_table_init();
     fs = new_tecnicofs(numberBuckets);
-    createSocket(socketName);
-    treatConnection();
+    applyThread();
+    gettimeofday(&end, NULL);
     FILE* fptr = fopen(fileOutput, "w");
     print_tecnicofs_tree(fptr, fs, numberBuckets);
+    fclose(fptr);
     free_tecnicofs(fs, numberBuckets);
-    inode_table_destroy();
-    gettimeofday(&end, NULL);
     seconds = (double) (end.tv_sec - start.tv_sec);
     micros = (double) ((seconds + (double) (end.tv_usec - start.tv_usec)/1000000));
-    fprintf(fptr, "TecnicoFS completed in %.4f seconds.\n", micros);
-    fclose(fptr);
+    printf("TecnicoFS completed in %.4f seconds.\n", micros);
     exit(EXIT_SUCCESS);
 }

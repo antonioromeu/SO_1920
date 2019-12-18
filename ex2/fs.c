@@ -45,7 +45,7 @@ int lookup(tecnicofs* fs, char* name, int numberBuckets) {
 	node* searchNode = search(fs->vector[i], name);
 	if (searchNode)
         return searchNode->inumber;
-	return -1;
+	return 0;
 }
 
 void print_tecnicofs_tree(FILE* fp, tecnicofs* fs, int numberBuckets) {
