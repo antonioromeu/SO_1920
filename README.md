@@ -10,5 +10,3 @@ This project consists on a program for managing multiples files in a file manage
 ## Acknowledgments
 
 Some skeleton code was given by the teachers.  
-
-## Evaluation
